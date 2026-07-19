@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { api, type DetectedEvent, type HealthResponse, type NotificationBatch, type ReleaseRule, type WatchTask } from '../api.js';
+import { accessPolicy } from '../catalog.js';
 import styles from './pages.module.css';
 
 type NowData = {
@@ -32,6 +33,18 @@ function nextAction(data: NowData): { title: string; description: string; to: st
       action: '查看本机状态',
     };
   }
+  // 顶层 status 只要存储可用就恒为 healthy，worker 异常必须看 checks.worker，
+  // 否则监测中断期间首屏仍会误称“监控正在运行”。
+  const workerCheck = data.health.checks.worker;
+  if (!workerCheck || workerCheck.status !== 'healthy' || workerCheck.running === false) {
+    return {
+      title: '下一步：先检查本机 Worker',
+      description:
+        '监测曾中断或本机 Worker 异常。Worker 恢复前，没有新事件不代表没有变化。请到本机设置查看 Worker 状态。',
+      to: '/settings',
+      action: '查看本机状态',
+    };
+  }
   if (data.tasks.length === 0) {
     return {
       title: '下一步：创建第一件关注',
@@ -57,9 +70,15 @@ function nextAction(data: NowData): { title: string; description: string; to: st
       action: '查看关注任务',
     };
   }
+  // 只有启用中的 A/B 级任务才存在实时检测；纯 C 级只是按规则提醒，不能说“监控正在运行”
+  const hasMonitoredTask = data.tasks.some(
+    (task) => task.enabled && accessPolicy(task.hospitalId).level !== 'C',
+  );
   return {
     title: '下一步：核对最近规则',
-    description: '监控正在运行，目前没有新的变化事件。可以核对放号时间和最后核验日期。',
+    description: hasMonitoredTask
+      ? '监控正在运行，目前没有新的变化事件。可以核对放号时间和最后核验日期。'
+      : '规则提醒运行中，目前没有新的变化事件。可以核对放号时间和最后核验日期。',
     to: '/rules',
     action: '查看规则与日历',
   };
@@ -140,6 +159,9 @@ export function NowPage() {
       <section className={styles.actionPanel} aria-labelledby="next-action-title">
         <h2 id="next-action-title">{action.title}</h2>
         <p>{action.description}</p>
+        {state.data.health.checks.worker?.lastRebaselineAt ? (
+          <p>最近监测曾出现空窗，系统已重建检测基线。空窗期间是否有变化不做推断，也不会补报，请以官方渠道确认。</p>
+        ) : null}
         <div className={styles.actions}>
           <Link className={styles.primaryButton} to={action.to}>
             {action.action}

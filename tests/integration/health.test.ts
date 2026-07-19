@@ -70,6 +70,9 @@ describe('GET /api/health', () => {
         lastErrorCode: 'WORKER_TICK_FAILED',
         heartbeatGapMs: null,
       });
+    expect(
+      (await app.inject({ method: 'GET', url: '/api/health', headers })).json().status,
+    ).toBe('degraded');
 
     database.exec('ALTER TABLE job_temporarily_unavailable RENAME TO job');
     now += 5;

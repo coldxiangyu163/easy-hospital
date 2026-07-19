@@ -12,12 +12,16 @@ export class ApiError extends Error {
   }
 }
 
+// 服务端要求：带 Origin 的写请求必须携带该头（CSRF 简单请求防护）。
+// 同源 UI 统一注入；跨站页面无法携带自定义头（会触发预检且被无 CORS 策略拒绝）。
+const CLIENT_HEADERS = { 'x-easy-hospital-client': 'web' } as const;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: init?.body
-      ? { 'content-type': 'application/json; charset=utf-8', ...init.headers }
-      : init?.headers,
+      ? { 'content-type': 'application/json; charset=utf-8', ...CLIENT_HEADERS, ...init.headers }
+      : { ...CLIENT_HEADERS, ...init?.headers },
   });
 
   if (!response.ok) {
@@ -43,7 +47,13 @@ export type HealthResponse = {
   status: string;
   checks: {
     storage?: { status?: string };
-    worker?: { status?: string; running?: boolean };
+    worker?: {
+      // 与 src/server/local-worker.ts 的 WorkerHealth 对齐；顶层 status 不含 worker 状态，必须下钻
+      status?: 'healthy' | 'degraded' | 'stopped';
+      running?: boolean;
+      lastErrorCode?: string | null;
+      lastRebaselineAt?: string | null;
+    };
   };
 };
 
@@ -138,6 +148,12 @@ export type SourceCapability = {
     cancellation: boolean;
     ruleReminder: boolean;
   };
+  runtime: {
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    lastStatus: string | null;
+    lastErrorCode: string | null;
+  } | null;
 };
 
 export type NotificationChannelStatus = {
@@ -189,6 +205,7 @@ export type NotificationBatch = {
     channel: string;
     state: 'pending' | 'sending' | 'sent' | 'failed' | 'delivery_unknown';
     attempts: number;
+    messageId: string;
     errorCode: string | null;
   }>;
 };

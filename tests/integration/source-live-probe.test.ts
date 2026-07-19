@@ -75,6 +75,25 @@ describe('SourceAdapter live probe', () => {
     expect(first.json()).toMatchObject({ status: 'OK', eventsCreated: 0 });
     expect(calls).toBe(1);
 
+    const sourceStatus = await app.inject({
+      method: 'GET',
+      url: '/api/source-adapters',
+      headers,
+    });
+    expect(sourceStatus.json().adapters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'fixture-live',
+          runtime: expect.objectContaining({
+            lastAttemptAt: expect.any(String),
+            lastSuccessAt: expect.any(String),
+            lastStatus: 'OK',
+            lastErrorCode: null,
+          }),
+        }),
+      ]),
+    );
+
     const legacyEndpointIsAlsoLimited = await app.inject({
       method: 'POST',
       url: '/api/source-checks/fixture-live',

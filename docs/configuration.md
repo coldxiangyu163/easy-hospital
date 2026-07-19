@@ -30,7 +30,7 @@ chmod 600 .env
 |---|---|---:|---|
 | `RADAR_HOST` | `127.0.0.1` | 是 | 只允许 loopback。稳定版不支持 `0.0.0.0`、局域网 IP、公网 IP 或反向代理模式 |
 | `RADAR_PORT` | `3210` | 是 | 本机未占用端口，建议使用 1024 到 65535 |
-| `RADAR_DATA_DIR` | `./data` | 是 | 本机文件系统目录，保存 SQLite、WAL、备份、锁和脱敏日志 |
+| `RADAR_DATA_DIR` | 平台数据目录（见下） | 是 | 本机文件系统目录，保存 SQLite、WAL、备份、锁和脱敏日志 |
 | `RADAR_TIMEZONE` | `Asia/Shanghai` | 是 | 固定为北京时间，当前不支持其他时区 |
 | `EASY_HOSPITAL_DISABLE_LIVE_SOURCES` | `0` | 仅测试/CI | 只有精确值 `1` 会让生产 runtime 注入空来源适配器，禁止真实医院来源请求 |
 | `EASY_HOSPITAL_BROWSER_AGENT_TOKEN` | 空 | 可选、实验性 | 至少 32 字节随机配对值；不是医院凭证。为空时 B 级 Browser Agent 完全关闭 |
@@ -69,11 +69,16 @@ RADAR_PORT=4321
 
 ### 数据目录
 
-开发环境可以保留默认值：
+`.env.example` 显式提供开发默认值：
 
 ```dotenv
 RADAR_DATA_DIR=./data
 ```
+
+注意：`./data` 只是 `.env.example` 的显式配置，不是应用内建默认值。如果完全没有设置
+`RADAR_DATA_DIR`（包括没有 `.env` 就直接 `npm start`），应用会使用平台数据目录——
+macOS 为 `~/Library/Application Support/easy-hospital`，Linux 为
+`${XDG_DATA_HOME:-~/.local/share}/easy-hospital`——而不是仓库内的 `./data`。
 
 长期使用建议改成仓库外的绝对路径，避免切换分支、清理工作树或误删仓库时影响数据。目录必须位于本机磁盘，不能放在 NFS、SMB、NAS、iCloud Drive、Dropbox、OneDrive 或其他多机同步目录。
 
@@ -329,6 +334,21 @@ npm ci
 ### 端口被占用
 
 修改 `RADAR_PORT`，不要同时启动第二份应用共用同一数据目录。
+
+### 提示「数据目录已有 easy-hospital 实例运行」
+
+应用用 `<RADAR_DATA_DIR>/data.sqlite3.lock` 目录防止多实例写同一数据库。正常停止时锁
+会自动清除；进程被 `SIGKILL`、断电或崩溃杀死会留下锁，但下次启动检测到锁内 PID 已
+不存在时会自动回收，无需人工处理。
+
+需要人工介入的唯一情况：旧进程退出后其 PID 被系统复用给了无关进程，应用 fail closed
+拒绝启动。此时：
+
+1. 确认没有正在运行的 easy-hospital 进程（macOS 用活动监视器，或 `pgrep -fl 'easy-hospital|dist/server/server/main.js'`）。
+2. 确认后删除锁目录：`rm -rf "<RADAR_DATA_DIR>/data.sqlite3.lock"`。
+3. 重新 `npm start`。
+
+不要为了绕过检查而共享数据目录给第二个实例，也不要在应用运行中删除锁目录。
 
 ### 数据目录不可写
 

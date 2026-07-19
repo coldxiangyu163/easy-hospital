@@ -29,7 +29,11 @@ describe('Fastify SQLITE_BUSY mapping', () => {
     const request = {
       method: 'POST' as const,
       url: '/api/watch-tasks',
-      headers: { host: '127.0.0.1', origin: 'http://127.0.0.1:3210' },
+      headers: {
+        host: '127.0.0.1',
+        origin: 'http://127.0.0.1:3210',
+        'x-easy-hospital-client': 'web',
+      },
       payload: {
         hospitalId: 'hospital-pumch',
         campusId: 'campus-pumch-dongdan',

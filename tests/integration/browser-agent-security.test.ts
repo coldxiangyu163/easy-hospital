@@ -43,7 +43,7 @@ function payload(scopeName: Scope, requestId: string, observedAt: string) {
         session: 'AM',
         doctorName: null,
         title: null,
-        scheduleStatus: 'present',
+        scheduleStatus: 'unknown',
         availability: 'unavailable',
         officialEntryUrl: scope.officialEntryUrl,
         evidence: 'explicit',

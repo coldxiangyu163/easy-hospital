@@ -72,6 +72,20 @@ export interface PumchAdapterDependencies {
 const canonicalHash = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+const resolveAllowedRedirect = (response: Response, baseUrl: string): string | null => {
+  const location = response.headers.get('location');
+  if (!location) return null;
+  try {
+    const redirectUrl = new URL(location, baseUrl);
+    return redirectUrl.protocol === 'https:' &&
+      pumchDermatologyScheduleManifest.allowedHosts.includes(redirectUrl.hostname)
+      ? redirectUrl.toString()
+      : null;
+  } catch {
+    return null;
+  }
+};
+
 const diagnosticResult = (
   status: CheckResult['status'],
   errorCode: string,
@@ -167,43 +181,38 @@ export function createPumchDermatologyScheduleAdapter(
       );
       let fetchedHtml: string;
       try {
-        const response = await fetchImpl(PUMCH_SCHEDULE_URL, {
-          headers: {
-            accept: 'text/html,application/xhtml+xml',
-          },
-          redirect: 'manual',
-          signal: controller.signal,
-        });
+        const fetchOnce = (targetUrl: string): Promise<Response> =>
+          fetchImpl(targetUrl, {
+            headers: {
+              accept: 'text/html,application/xhtml+xml',
+            },
+            redirect: 'manual',
+            signal: controller.signal,
+          });
+
+        let response = await fetchOnce(PUMCH_SCHEDULE_URL);
 
         if (response.status >= 300 && response.status < 400) {
-          const location = response.headers.get('location');
-          let redirectAllowed = false;
-          if (location) {
-            try {
-              const redirectUrl = new URL(location, PUMCH_SCHEDULE_URL);
-              redirectAllowed =
-                redirectUrl.protocol === 'https:' &&
-                pumchDermatologyScheduleManifest.allowedHosts.includes(redirectUrl.hostname);
-            } catch {
-              redirectAllowed = false;
-            }
-          }
-
-          if (!redirectAllowed) {
+          const redirectTarget = resolveAllowedRedirect(response, PUMCH_SCHEDULE_URL);
+          if (!redirectTarget) {
             return diagnosticResult(
               'SOURCE_CHANGED',
               'PUMCH_REDIRECT_NOT_ALLOWED',
               observedAt,
             );
           }
-          return diagnosticResult(
-            'TEMPORARY_FAILURE',
-            'PUMCH_REDIRECT_RETRY_REQUIRED',
-            observedAt,
-          );
+          // allowlist 内重定向只跟随一次；二次重定向或循环一律失败。
+          response = await fetchOnce(redirectTarget);
+          if (response.status >= 300 && response.status < 400) {
+            return diagnosticResult(
+              'TEMPORARY_FAILURE',
+              'PUMCH_REDIRECT_RETRY_REQUIRED',
+              observedAt,
+            );
+          }
         }
 
-        if (response.status === 403 || response.status === 429) {
+        if (response.status === 403 || response.status === 418 || response.status === 429) {
           return diagnosticResult('RATE_LIMITED', 'PUMCH_WAF_OR_ACCESS_DENIED', observedAt);
         }
         if (response.status >= 500) {

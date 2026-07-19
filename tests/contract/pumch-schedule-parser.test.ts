@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { parsePumchSchedule } from '../../src/adapters/sources/pumch-schedule.js';
+import {
+  parsePumchSchedule,
+  PumchScheduleParseError,
+} from '../../src/adapters/sources/pumch-schedule.js';
 
 const fixtureUrl = new URL('../fixtures/pumch/skin-schedule.fragment.html', import.meta.url);
 const metadataUrl = new URL('../fixtures/pumch/skin-schedule.fragment.meta.json', import.meta.url);
@@ -99,5 +102,55 @@ describe('parsePumchSchedule fixture contract', () => {
     expect(parsePumchSchedule(html).sessions).toEqual([
       { date: '2026-07-20', period: 'morning', doctors: ['医生甲'] },
     ]);
+  });
+
+  it('fails closed when a doctor name appears as plain text without a link', () => {
+    const html = `
+      <table>
+        <tr><th class="th3">2026.07.20</th></tr>
+        <tr><td>上午</td><td class="tdh3"><span>医生甲</span></td></tr>
+      </table>
+    `;
+
+    expect(() => parsePumchSchedule(html)).toThrowError(PumchScheduleParseError);
+  });
+
+  it('fails closed when residual plain text appears next to linked doctors', () => {
+    const html = `
+      <table>
+        <tr><th class="th3">2026.07.20</th></tr>
+        <tr><td>上午</td><td class="tdh3"><span><a href="/d/1.html">医生甲</a></span>医生乙</td></tr>
+      </table>
+    `;
+
+    expect(() => parsePumchSchedule(html)).toThrowError(PumchScheduleParseError);
+  });
+
+  it.each([
+    ['停诊', '<td class="tdh3">停诊</td>'],
+    ['预约说明', '<td class="tdh3"><span>点击查看预约说明</span></td>'],
+  ])('keeps a non-empty action-only cell safe (%s) without failing or inventing doctors', (_label, cell) => {
+    const html = `
+      <table>
+        <tr><th class="th3">2026.07.20</th></tr>
+        <tr><td>上午</td>${cell}</tr>
+      </table>
+    `;
+
+    expect(parsePumchSchedule(html).sessions).toEqual([]);
+  });
+
+  it('keeps a truly empty schedule (all date cells empty) as a legitimate empty result', () => {
+    const html = `
+      <table>
+        <tr><th class="th3">2026.07.20</th><th class="th3">2026.07.21</th></tr>
+        <tr><td>上午</td><td class="tdh3"></td><td class="tdh4"><div class="tdbox"></div></td></tr>
+        <tr><td>下午</td><td class="tdh3"></td><td class="tdh4"></td></tr>
+      </table>
+    `;
+
+    const schedule = parsePumchSchedule(html);
+    expect(schedule.range).toEqual({ start: '2026-07-20', end: '2026-07-21' });
+    expect(schedule.sessions).toEqual([]);
   });
 });

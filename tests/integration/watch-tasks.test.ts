@@ -34,12 +34,8 @@ describe('WatchTask HTTP /api seam', () => {
         titles: [],
         dateFrom: '2026-07-20',
         dateTo: '2026-07-26',
-        session: 'AM',
-        eventTypes: [
-          'schedule_released',
-          'availability_changed_to_available',
-          'cancellation_slot_detected',
-        ],
+        session: 'ANY',
+        eventTypes: ['schedule_released'],
         remindBeforeMinutes: 5,
       },
     });
@@ -51,7 +47,7 @@ describe('WatchTask HTTP /api seam', () => {
       matchMode: 'any_expert',
       dateFrom: '2026-07-20',
       dateTo: '2026-07-26',
-      session: 'AM',
+      session: 'ANY',
       enabled: true,
       version: 1,
     });
@@ -63,6 +59,34 @@ describe('WatchTask HTTP /api seam', () => {
     });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json()).toEqual({ tasks: [created] });
+  });
+
+  it('同仁 C 级 API 拒绝医生、时段与实时号源事件条件', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-task-policy-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      enforceWatchTaskPolicy: true,
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1' },
+      payload: {
+        hospitalId: 'hospital-tongren',
+        campusId: 'campus-tongren-chongwenmen',
+        departmentId: 'department-tongren-rhinology',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-20',
+        dateTo: '2026-07-26',
+        session: 'AM',
+        eventTypes: ['schedule_released', 'availability_changed_to_available'],
+        remindBeforeMinutes: 5,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: 'SOURCE_POLICY_VIOLATION' });
   });
 
   it('按版本编辑、读取并软删除关注任务', async () => {
@@ -151,5 +175,61 @@ describe('WatchTask HTTP /api seam', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: 'VALIDATION_ERROR' });
+  });
+
+  it('生产日期窗口拒绝过去日期与北京时间今天加 14 天以外的创建和编辑', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-task-window-'));
+    const now = Date.parse('2026-07-19T00:00:00.000Z');
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      now: () => now,
+      enforceTaskDateWindow: true,
+    });
+    const headers = { host: '127.0.0.1' };
+    const base = {
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      matchMode: 'any_expert',
+      doctorName: null,
+      titles: [],
+      session: 'ANY',
+      eventTypes: ['schedule_released'],
+      remindBeforeMinutes: null,
+    };
+
+    const past = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: { ...base, dateFrom: '2026-07-18', dateTo: '2026-07-20' },
+    });
+    expect(past.statusCode).toBe(400);
+    expect(past.json()).toMatchObject({ error: 'VALIDATION_ERROR' });
+
+    const tooFar = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: { ...base, dateFrom: '2026-07-29', dateTo: '2026-08-03' },
+    });
+    expect(tooFar.statusCode).toBe(400);
+
+    const valid = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: { ...base, dateFrom: '2026-07-20', dateTo: '2026-07-26' },
+    });
+    expect(valid.statusCode).toBe(201);
+
+    const invalidPatch = await app.inject({
+      method: 'PATCH',
+      url: `/api/watch-tasks/${valid.json().id}`,
+      headers,
+      payload: { version: valid.json().version, dateFrom: '2026-07-29', dateTo: '2026-08-03' },
+    });
+    expect(invalidPatch.statusCode).toBe(400);
+    expect(invalidPatch.json()).toMatchObject({ error: 'VALIDATION_ERROR' });
   });
 });

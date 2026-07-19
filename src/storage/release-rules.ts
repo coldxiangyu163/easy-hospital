@@ -41,20 +41,49 @@ function toReleaseRule(row: ReleaseRuleRow): ReleaseRule {
   };
 }
 
+type DomainKind = 'official' | 'evidence';
+
+function listHospitalDomains(
+  database: SqliteDatabase,
+  hospitalId: string,
+  kind: DomainKind,
+): string[] {
+  return (
+    database
+      .prepare('SELECT domain FROM hospital_domain WHERE hospital_id = ? AND kind = ?')
+      .all(hospitalId, kind) as Array<{ domain: string }>
+  ).map((row) => row.domain);
+}
+
+function normalizeHostname(value: string): string | undefined {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '');
+  } catch {
+    return undefined;
+  }
+}
+
+function hostnameMatchesDomain(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+// 官方域/证据域的单一事实源是 hospital_domain 表（migration 17）：
+// officialEntryUrl 必须落在 official 域，sourceUrl 必须落在 evidence 域；
+// 未登记任何域的医院一律拒绝（fail closed）。
 export function hasOfficialRuleUrls(
   database: SqliteDatabase,
   input: Pick<ReleaseRuleInput, 'hospitalId' | 'officialEntryUrl' | 'sourceUrl'>,
 ): boolean {
-  const hospital = database
-    .prepare('SELECT official_url FROM hospital WHERE id = ?')
-    .get(input.hospitalId) as { official_url: string } | undefined;
-  if (!hospital) return false;
+  const officialHost = normalizeHostname(input.officialEntryUrl);
+  const sourceHost = normalizeHostname(input.sourceUrl);
+  if (!officialHost || !sourceHost) return false;
 
-  const officialHost = new URL(hospital.official_url).hostname.replace(/^www\./, '');
-  return [input.officialEntryUrl, input.sourceUrl].every((url) => {
-    const hostname = new URL(url).hostname.replace(/^www\./, '');
-    return hostname === officialHost || hostname.endsWith(`.${officialHost}`);
-  });
+  const officialDomains = listHospitalDomains(database, input.hospitalId, 'official');
+  const evidenceDomains = listHospitalDomains(database, input.hospitalId, 'evidence');
+  return (
+    officialDomains.some((domain) => hostnameMatchesDomain(officialHost, domain)) &&
+    evidenceDomains.some((domain) => hostnameMatchesDomain(sourceHost, domain))
+  );
 }
 
 export function createReleaseRule(

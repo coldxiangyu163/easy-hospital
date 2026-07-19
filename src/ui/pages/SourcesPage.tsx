@@ -15,6 +15,31 @@ type ProbeState =
   | { status: 'done'; result: SourceProbeResult }
   | { status: 'error'; message: string };
 
+const beijingTime = (value: string): string =>
+  new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+
+const sourceRuntimeMessage = (adapter: SourceCapability): { text: string; warning: boolean } => {
+  const runtime = adapter.runtime;
+  if (!runtime) return { text: '尚无检查记录。', warning: false };
+  const lastSuccess = runtime.lastSuccessAt
+    ? `上次成功：${beijingTime(runtime.lastSuccessAt)}`
+    : '尚无成功记录';
+  if (runtime.lastStatus === 'OK' || runtime.lastStatus === 'PARTIAL') {
+    return { text: lastSuccess, warning: false };
+  }
+  if (runtime.lastStatus === 'RUNNING') {
+    return { text: `正在检查；${lastSuccess}`, warning: false };
+  }
+  return {
+    text: `最近检查不可用${runtime.lastErrorCode ? `（${runtime.lastErrorCode}）` : ''}；${lastSuccess}`,
+    warning: true,
+  };
+};
+
 const probeMessage = (result: SourceProbeResult): string => {
   if (result.status === 'OK' && result.eventsCreated === 0) return '来源自检已完成；此次未发现可通知变化。';
   if (result.status === 'OK') return `来源自检已完成，并记录 ${result.eventsCreated} 条变化；请在通知记录中核验。`;
@@ -114,6 +139,7 @@ export function SourcesPage() {
           const policy = accessPolicy(hospital.id);
           const adapter = state.adapters.find((item) => item.accessClass === policy.level);
           const probeState = adapter ? probeStates[adapter.key] : undefined;
+          const runtimeMessage = adapter ? sourceRuntimeMessage(adapter) : undefined;
           return (
             <article className={styles.sourceRow} key={department.id}>
               <div className={styles.sourceLevel} aria-label={`${policy.level} 级`}>
@@ -124,6 +150,11 @@ export function SourcesPage() {
                 <strong>{policy.level === 'A' ? 'A 级公开来源' : 'C 级规则提醒'}</strong>
                 <p>{policy.description}</p>
                 {adapter ? <code className={styles.adapterKey}>{adapter.key}</code> : null}
+                {policy.level === 'A' && runtimeMessage ? (
+                  <p className={runtimeMessage.warning ? styles.probeError : styles.probeResult}>
+                    {runtimeMessage.text}
+                  </p>
+                ) : null}
               </div>
               <div className={styles.sourceStatusGroup}>
                 <span className={adapter?.enabled ? styles.statusGood : styles.statusWarning}>

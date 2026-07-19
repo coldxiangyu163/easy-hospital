@@ -89,9 +89,31 @@ function matches(task: WatchTask, observation: Observation): boolean {
   return true;
 }
 
+// 长时间离线后的重建基线路径只删除基线行；schedule_state / availability_state
+// 是审计状态，必须保留。返回是否有基线行被删除。
+export function deleteMonitoringBaseline(
+  database: SqliteDatabase,
+  sourceId: string,
+  scopeKey: string,
+): boolean {
+  return (
+    database
+      .prepare('DELETE FROM monitoring_baseline WHERE source_id = ? AND scope_key = ?')
+      .run(sourceId, scopeKey).changes === 1
+  );
+}
+
 export function applyCheckResult(
   database: SqliteDatabase,
-  input: { sourceId: string; scopeKey: string; requestId: string; result: CheckResult },
+  input: {
+    sourceId: string;
+    scopeKey: string;
+    requestId: string;
+    result: CheckResult;
+    // rebaseline = 监测空窗后的重建基线轮：状态照常落库、基线照常重建，
+    // 但本轮不产生任何事件，不把空窗期间的差异当作变化通知（README 承诺）。
+    rebaseline?: boolean;
+  },
 ): number {
   const observedAt = Date.parse(input.result.observedAt);
 
@@ -139,7 +161,7 @@ export function applyCheckResult(
         .get(input.sourceId, input.scopeKey),
     );
     const canEstablishBaseline =
-      input.result.observations.length === 0 ||
+      (input.result.status === 'OK' && input.result.observations.length === 0) ||
       input.result.observations.some(
         (observation) =>
           observation.scheduleStatus !== 'unknown' || observation.availability !== 'unknown',
@@ -154,7 +176,12 @@ export function applyCheckResult(
         .prepare('SELECT * FROM availability_state WHERE source_id = ? AND slot_key = ?')
         .get(input.sourceId, observation.slotKey) as AvailabilityStateRow | undefined;
 
-      if (!schedulePrevious && hasBaseline && observation.scheduleStatus === 'present') {
+      if (
+        !input.rebaseline &&
+        !schedulePrevious &&
+        hasBaseline &&
+        observation.scheduleStatus === 'present'
+      ) {
         for (const task of tasks) {
           if (!matches(task, observation)) continue;
           if (!task.eventTypes.includes('schedule_released')) continue;
@@ -234,6 +261,7 @@ export function applyCheckResult(
           : observation.scheduleStatus;
 
       if (
+        !input.rebaseline &&
         previous?.availability === 'unavailable' &&
         observation.availability === 'available'
       ) {

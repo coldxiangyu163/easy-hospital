@@ -1,5 +1,7 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import { resolve } from 'node:path';
 
 import { createBarkChannelFromEnv } from '../adapters/notifications/bark.js';
 import { MacOsNotificationChannel } from '../adapters/notifications/macos.js';
@@ -21,6 +23,16 @@ export type RunningApplication = {
   url: string;
   close(): Promise<void>;
 };
+
+// 收紧本机秘密文件权限；跨平台容错：不支持 POSIX 权限位的平台返回 false 而不中断启动。
+export async function restrictPathPermissions(path: string, mode: number): Promise<boolean> {
+  try {
+    await chmod(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -79,6 +91,11 @@ export async function startApplicationFromEnvironment(
 ): Promise<RunningApplication> {
   const config = loadRuntimeConfig(env);
   await mkdir(config.dataDirectory, { recursive: true });
+  await restrictPathPermissions(config.dataDirectory, 0o700);
+  if (env.NODE_ENV === 'production') {
+    const envFile = resolve(process.cwd(), '.env');
+    if (existsSync(envFile)) await restrictPathPermissions(envFile, 0o600);
+  }
 
   const candidates = [
     new MacOsNotificationChannel(),

@@ -282,7 +282,8 @@
 
 .policyNote p {
   margin: 4px 0 0;
-  color: var(--ink-muted);
+  /* 浅绿底（--accent-soft）上 --ink-muted 只有 4.42:1，不足 AA；#5e6763 实测 4.99:1 */
+  color: #5e6763;
   font-size: 13px;
 }
 
@@ -429,7 +430,8 @@
 
 .setupSummaryGood span,
 .setupSummaryWarning span {
-  color: var(--ink-muted);
+  /* 同上：浅绿/浅黄底上需要 ≥4.5:1 */
+  color: #5e6763;
   font-size: 12px;
 }
 

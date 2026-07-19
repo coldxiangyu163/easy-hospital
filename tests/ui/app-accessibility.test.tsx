@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe('应用导航可访问性', () => {
-  it('路由切换时更新标题并把焦点移到主要内容', async () => {
+  it('路由切换时更新标题并把焦点移到主要内容，且不移动顺序焦点起点', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/watch-tasks') return jsonResponse({ tasks: [] });
@@ -47,10 +47,11 @@ describe('应用导航可访问性', () => {
 
     expect(document.title).toBe('关注任务 · 北京挂号雷达');
     expect(document.getElementById('main-content')).toHaveFocus();
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'center' });
+    // 回归：scrollIntoView 会移动浏览器顺序焦点起点，导致首 Tab 跳过「跳到主要内容」
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
-  it('直接进入后半段导航时主动把当前项滚动到可见范围', async () => {
+  it('直接进入后半段导航时直接滚动导航容器，保持当前项可见', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/health') return jsonResponse({
@@ -73,6 +74,12 @@ describe('应用导航可访问性', () => {
       configurable: true,
       value: scrollIntoView,
     });
+    const scrollLeftSet = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollLeft', {
+      configurable: true,
+      get: () => 0,
+      set: scrollLeftSet,
+    });
 
     render(
       <MemoryRouter initialEntries={['/settings']}>
@@ -81,7 +88,9 @@ describe('应用导航可访问性', () => {
     );
 
     await screen.findByRole('heading', { name: '先确认这台电脑已经准备好' });
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'center' }));
+    // 用赋值 scrollLeft 的方式滚动容器，而不是 scrollIntoView
+    await waitFor(() => expect(scrollLeftSet).toHaveBeenCalled());
+    expect(scrollIntoView).not.toHaveBeenCalled();
     expect(document.title).toBe('本机设置 · 北京挂号雷达');
   });
 });

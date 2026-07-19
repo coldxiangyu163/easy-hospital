@@ -34,7 +34,7 @@ describe('Browser Agent local ingest compatibility', () => {
           session: 'AM',
           doctorName: '医生甲',
           title: null,
-          scheduleStatus: 'present',
+          scheduleStatus: 'unknown',
           availability: 'available',
           officialEntryUrl: 'https://pumchapp.pumch.cn/',
           evidence: 'explicit',

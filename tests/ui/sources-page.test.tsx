@@ -50,11 +50,18 @@ describe('数据来源', () => {
             key: 'pumch-public-dermatology-schedule', accessClass: 'A', enabled: true,
             transport: 'playwright', minIntervalMs: 300000,
             capabilities: { schedule: true, availability: false, cancellation: false, ruleReminder: false },
+            runtime: {
+              lastAttemptAt: '2026-07-19T08:10:00.000Z',
+              lastSuccessAt: '2026-07-19T08:00:00.000Z',
+              lastStatus: 'TEMPORARY_FAILURE',
+              lastErrorCode: 'SOURCE_CHECK_FAILED',
+            },
           },
           {
             key: 'browser-agent', accessClass: 'B', enabled: false,
             transport: 'local-agent', minIntervalMs: 300000,
-            capabilities: { schedule: true, availability: true, cancellation: true, ruleReminder: false },
+            capabilities: { schedule: false, availability: true, cancellation: true, ruleReminder: false },
+            runtime: null,
           },
           {
             key: 'tongren-rhinology-rules', accessClass: 'C', enabled: true,
@@ -80,6 +87,8 @@ describe('数据来源', () => {
     expect(screen.getByText('C 级规则提醒')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'B 级本机浏览器会话' })).toBeInTheDocument();
     expect(screen.getByText('pumch-public-dermatology-schedule')).toBeInTheDocument();
+    expect(screen.getByText(/最近检查不可用（SOURCE_CHECK_FAILED）/)).toBeInTheDocument();
+    expect(screen.getByText(/上次成功：2026年7月19日 16:00/)).toBeInTheDocument();
     expect(screen.getAllByText('已启用').length).toBeGreaterThan(0);
     expect(screen.getByText('未配置')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '运行 A 级来源自检' }));

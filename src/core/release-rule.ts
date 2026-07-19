@@ -18,7 +18,13 @@ export type ReleaseRuleInput = z.infer<typeof releaseRuleInputSchema>;
 
 export const releaseRulePatchSchema = releaseRuleInputSchema
   .partial()
-  .extend({ enabled: z.boolean().optional() })
+  .extend({
+    enabled: z.boolean().optional(),
+    // input schema 的 .default(false) 经 .partial() 后仍会在未传值时输出 false，
+    // 导致任何 PATCH 都把 needsReconfirmation 静默清零；这里改为纯 optional，
+    // 未显式传值时输出不含该键，由存储层保留原值。
+    needsReconfirmation: z.boolean().optional(),
+  })
   .refine((value) => Object.keys(value).length > 0, '至少提供一个要修改的字段');
 
 export type ReleaseRulePatch = z.infer<typeof releaseRulePatchSchema>;

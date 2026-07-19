@@ -41,7 +41,7 @@ describe('buildBrowserAgentPayload', () => {
           doctorName: '医生甲',
           title: null,
           availability: 'available',
-          scheduleStatus: 'present',
+          scheduleStatus: 'unknown',
           officialEntryUrl: 'https://pumchapp.pumch.cn/',
           evidence: 'explicit',
         },

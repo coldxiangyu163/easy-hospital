@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -36,6 +37,7 @@ const migrationNames = [
   'tongren-release-rule-seed',
   'browser-agent-admission-security',
   'migration-manifest-checksums',
+  'hospital-domain-policy',
 ] as const;
 
 function currentVersion(path: string): number {
@@ -57,6 +59,8 @@ function downgradeCurrentDatabase(path: string, version: 14 | 15): void {
 
   const database = new Database(path);
   try {
+    database.exec('DROP TABLE hospital_domain;');
+    database.exec('DELETE FROM schema_migration WHERE version = 17;');
     database.exec('DELETE FROM schema_migration WHERE version = 16;');
     database.exec('ALTER TABLE schema_migration DROP COLUMN checksum;');
     if (version === 14) {
@@ -91,7 +95,7 @@ describe('SQLite 发布级硬化', () => {
       .all() as Array<{ version: number; name: string; checksum: string }>;
     upgraded.close();
 
-    expect(rows).toHaveLength(16);
+    expect(rows).toHaveLength(17);
     expect(rows.map(({ name }) => name)).toEqual(migrationNames);
     expect(rows.every(({ checksum }) => /^[a-f0-9]{64}$/.test(checksum))).toBe(true);
     expect(rows[0]?.checksum).toBe(
@@ -100,12 +104,15 @@ describe('SQLite 发布级硬化', () => {
     expect(rows[15]?.checksum).toBe(
       '273e015a473cb5f11c1d82e6029f02997b89615f488cd6be89e0d53319118974',
     );
+    expect(rows[16]?.checksum).toBe(
+      '81ae9076e3d0813d6bdb183fb22387c776c51ec39154de695e616cb095679d2e',
+    );
 
     const backups = listDatabaseBackups(path);
     expect(backups).toHaveLength(1);
     expect(backups[0].name).toMatch(
       new RegExp(
-        `^data\\.sqlite3\\.migration-v${version}-to-v16\\.\\d{8}T\\d{9}Z(?:\\.\\d+)?\\.sqlite3$`,
+        `^data\\.sqlite3\\.migration-v${version}-to-v17\\.\\d{8}T\\d{9}Z(?:\\.\\d+)?\\.sqlite3$`,
       ),
     );
     const verification = verifyDatabaseBackup(backups[0].path);
@@ -120,7 +127,7 @@ describe('SQLite 发布级硬化', () => {
           version: number;
         }
       ).version,
-    ).toBe(16);
+    ).toBe(17);
     reopened.close();
   });
 
@@ -224,7 +231,7 @@ describe('SQLite 发布级硬化', () => {
       ).name,
     ).toBe('北京协和医院');
     restored.close();
-    expect(currentVersion(path)).toBe(16);
+    expect(currentVersion(path)).toBe(17);
   });
 
   it('有效备份可显式恢复损坏主库，并保留损坏 rollback 原件', () => {
@@ -246,7 +253,7 @@ describe('SQLite 发布级硬化', () => {
           version: number;
         }
       ).version,
-    ).toBe(16);
+    ).toBe(17);
     restored.close();
   });
 
@@ -264,6 +271,34 @@ describe('SQLite 发布级硬化', () => {
     );
     expect(readFileSync(path)).toEqual(before);
     expect(existsSync(join(directory, 'corrupt'))).toBe(false);
+  });
+
+  it('数据目录 0700，主库/WAL/SHM 0600（POSIX 平台）', () => {
+    if (process.platform === 'win32') return;
+    directory = join(tmpdir(), `easy-hospital-perms-${process.pid}-${Date.now()}`);
+    const path = join(directory, 'data.sqlite3');
+    const database = openDatabase(path);
+    database.close();
+
+    const mode = (target: string): number => statSync(target).mode & 0o777;
+    expect(mode(directory)).toBe(0o700);
+    expect(mode(path)).toBe(0o600);
+    if (existsSync(`${path}-wal`)) expect(mode(`${path}-wal`)).toBe(0o600);
+    if (existsSync(`${path}-shm`)) expect(mode(`${path}-shm`)).toBe(0o600);
+  });
+
+  it('迁移备份目录 0700、备份文件 0600（POSIX 平台）', () => {
+    if (process.platform === 'win32') return;
+    directory = join(tmpdir(), `easy-hospital-backup-perms-${process.pid}-${Date.now()}`);
+    const path = join(directory, 'data.sqlite3');
+    downgradeCurrentDatabase(path, 15);
+    const upgraded = openDatabase(path);
+    upgraded.close();
+
+    const mode = (target: string): number => statSync(target).mode & 0o777;
+    expect(mode(join(directory, 'backups'))).toBe(0o700);
+    const [backup] = listDatabaseBackups(path);
+    expect(mode(backup.path)).toBe(0o600);
   });
 
   it('迁移一致性备份只保留最近 5 份', () => {

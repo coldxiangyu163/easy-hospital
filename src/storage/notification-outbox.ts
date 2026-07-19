@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { NotificationMessage, NotificationSendResult } from '../core/notification-channel.js';
 import type { EventType } from '../core/watch-task.js';
@@ -44,6 +44,7 @@ export type NotificationDeliveryView = {
   channel: string;
   state: 'pending' | 'sending' | 'sent' | 'failed' | 'delivery_unknown';
   attempts: number;
+  messageId: string;
   providerMessageId: string | null;
   errorCode: string | null;
   sentAt: string | null;
@@ -87,6 +88,7 @@ export function getNotificationDelivery(
         channel: row.channel_key,
         state: row.state,
         attempts: row.attempts,
+        messageId: row.message_id,
         providerMessageId: row.provider_message_id,
         errorCode: row.last_error_code,
         sentAt: row.sent_at === null ? null : new Date(row.sent_at).toISOString(),
@@ -106,6 +108,7 @@ function listDeliveryViews(
     channel: row.channel_key,
     state: row.state,
     attempts: row.attempts,
+    messageId: row.message_id,
     providerMessageId: row.provider_message_id,
     errorCode: row.last_error_code,
     sentAt: row.sent_at === null ? null : new Date(row.sent_at).toISOString(),
@@ -214,7 +217,13 @@ export function ensureReleaseReminderBatch(
   },
   now: number,
 ): NotificationBatch {
-  const id = `release-reminder:${input.taskId}:${input.occurrenceAt}`;
+  // id 含目标日期与官方入口哈希：规则改 advanceDays 或 URL 后，同 occurrence
+  // 的批次仍是与旧批次并存的新实体，不会撞上已终态的旧批次。
+  const urlHash = createHash('sha256')
+    .update(input.officialEntryUrl)
+    .digest('hex')
+    .slice(0, 12);
+  const id = `release-reminder:${input.taskId}:${input.occurrenceAt}:${input.targetDate}:${urlHash}`;
   const state = input.terminalReason ? 'failed' : 'pending';
   const metadata: BatchMetadata = {
     eventIds: [],
@@ -269,9 +278,77 @@ export function ensureReleaseReminderBatch(
           now,
         );
     }
+
+    if (input.terminalReason) {
+      // 批次可能已存在（重试/重启后 ensure 重入）：INSERT 被冲突忽略，
+      // 必须把仍在 pending 的 delivery 转成诚实终态，保留 sent / delivery_unknown。
+      database
+        .prepare(
+          `UPDATE notification_delivery
+           SET state = 'failed', last_error_code = ?, updated_at = ?
+           WHERE batch_id = ? AND state = 'pending'`,
+        )
+        .run(input.terminalReason, now, id);
+      const current = database
+        .prepare('SELECT event_ids_json FROM notification_batch WHERE id = ?')
+        .get(id) as { event_ids_json: string } | undefined;
+      if (current) {
+        const currentMetadata = parseBatchMetadata(current.event_ids_json);
+        currentMetadata.terminalReason = input.terminalReason;
+        database
+          .prepare(
+            `UPDATE notification_batch
+             SET event_ids_json = ?, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(serializeBatchMetadata(currentMetadata), now, id);
+      }
+      // 聚合状态由 delivery 推导：sent+failed → failed，含 unknown → delivery_unknown。
+      recomputeBatchState(database, id, now);
+    }
   })();
 
   return getNotificationBatch(database, id)!;
+}
+
+// 规则变更/删除时，把该规则所有未达终态的提醒批次转成诚实终态：
+// pending delivery 标 failed（保留 sent / delivery_unknown），绝不留下永久 pending。
+export function failReleaseReminderBatchesForRule(
+  database: SqliteDatabase,
+  ruleId: string,
+  reason: 'RULE_CHANGED' | 'RULE_DELETED',
+  now: number,
+): void {
+  const batches = database
+    .prepare(
+      `SELECT * FROM notification_batch
+       WHERE state IN ('collecting', 'pending', 'sending')
+         AND json_extract(event_ids_json, '$.kind') = 'release-reminder'
+         AND json_extract(event_ids_json, '$.ruleId') = ?`,
+    )
+    .all(ruleId) as NotificationBatchRow[];
+
+  for (const batch of batches) {
+    const metadata = parseBatchMetadata(batch.event_ids_json);
+    metadata.terminalReason = reason;
+    database.transaction(() => {
+      database
+        .prepare(
+          `UPDATE notification_delivery
+           SET state = 'failed', last_error_code = ?, updated_at = ?
+           WHERE batch_id = ? AND state = 'pending'`,
+        )
+        .run(reason, now, batch.id);
+      database
+        .prepare(
+          `UPDATE notification_batch
+           SET event_ids_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(serializeBatchMetadata(metadata), now, batch.id);
+      recomputeBatchState(database, batch.id, now);
+    })();
+  }
 }
 
 export function getNotificationBatch(
@@ -338,13 +415,49 @@ export function cancelInvalidNotificationBatches(
   }
 }
 
+const EVENT_NOTIFICATION_STALE_MS = 15 * 60_000;
+
+function failCollectingBatch(
+  database: SqliteDatabase,
+  batch: NotificationBatchRow,
+  reason: string,
+  now: number,
+): void {
+  const metadata = parseBatchMetadata(batch.event_ids_json);
+  metadata.terminalReason = reason;
+  database
+    .prepare(
+      `UPDATE notification_batch
+       SET state = 'failed', event_ids_json = ?, updated_at = ?
+       WHERE id = ? AND state = 'collecting'`,
+    )
+    .run(serializeBatchMetadata(metadata), now, batch.id);
+}
+
 export function prepareDueNotificationJobs(
   database: SqliteDatabase,
   runner: SqliteJobRunner,
   channelKeys: string[],
   now: number,
 ): void {
-  if (channelKeys.length === 0) return;
+  // 聚合窗口关闭超过 15 分钟仍未送达的事件已失去行动价值，转诚实终态，不补发。
+  const stale = database
+    .prepare("SELECT * FROM notification_batch WHERE state = 'collecting' AND closes_at < ?")
+    .all(now - EVENT_NOTIFICATION_STALE_MS) as NotificationBatchRow[];
+  for (const batch of stale) {
+    failCollectingBatch(database, batch, 'EVENT_NOTIFICATION_STALE', now);
+  }
+
+  // 没有任何可用渠道时，到期批次同样进入诚实终态，而不是永远停在 collecting。
+  if (channelKeys.length === 0) {
+    const undeliverable = database
+      .prepare("SELECT * FROM notification_batch WHERE state = 'collecting' AND closes_at <= ?")
+      .all(now) as NotificationBatchRow[];
+    for (const batch of undeliverable) {
+      failCollectingBatch(database, batch, 'NOTIFICATION_CHANNEL_NOT_FOUND', now);
+    }
+    return;
+  }
 
   const due = database
     .prepare("SELECT * FROM notification_batch WHERE state = 'collecting' AND closes_at <= ?")
@@ -509,6 +622,7 @@ export function getDeliveryMessage(
     `检测时间（北京时间）：${beijingDetectedAt}`,
     `证据：${evidence}；来源：${source}`,
     `本批次共 ${eventIds.length} 项`,
+    '本工具不代替人工预约，请前往官方渠道自行确认并完成预约。',
   ]
     .filter((line): line is string => Boolean(line))
     .join('\n');

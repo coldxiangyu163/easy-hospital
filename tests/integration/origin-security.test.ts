@@ -101,7 +101,11 @@ describe('写 API Origin 边界', () => {
     const accepted = await app.inject({
       method: 'POST',
       url: '/api/watch-tasks',
-      headers: { host: '127.0.0.1', origin: 'http://localhost:5173' },
+      headers: {
+        host: '127.0.0.1',
+        origin: 'http://localhost:5173',
+        'x-easy-hospital-client': 'web',
+      },
       payload,
     });
 
@@ -113,5 +117,134 @@ describe('写 API Origin 边界', () => {
       headers: { host: '127.0.0.1' },
     });
     expect(tasks.json().tasks).toHaveLength(1);
+  });
+
+  it('浏览器简单请求（loopback Origin、无 client 头）写请求一律 403 且无副作用', async () => {
+    const send = vi.fn<NotificationChannel['send']>(async () => ({
+      status: 'accepted',
+      providerMessageId: 'provider-id',
+    }));
+    const check = vi.fn<SourceAdapter['check']>(async () => ({
+      status: 'OK',
+      observedAt: '2026-07-19T00:00:00.000Z',
+      nextAllowedAt: null,
+      contentHash: 'a'.repeat(64),
+      observations: [],
+    }));
+    const channel: NotificationChannel = { key: 'csrf-capture', send };
+    const adapter: SourceAdapter = {
+      manifest: {
+        adapterKey: 'pumch-public-dermatology-schedule',
+        contractVersion: 1,
+        version: '1.0.0-test',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['www.pumch.cn'],
+        minIntervalMs: 300_000,
+      },
+      check,
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-csrf-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      notificationChannelStatuses: [{ key: channel.key, enabled: true, reason: null }],
+      sourceAdapters: [adapter],
+    });
+    // 简单请求特征：无自定义头、无 body 或 text/plain，浏览器必然带 Origin
+    const headers = { host: '127.0.0.1', origin: 'http://localhost:3000' };
+
+    const notification = await app.inject({
+      method: 'POST',
+      url: `/api/notifications/${channel.key}/test`,
+      headers,
+    });
+    const liveProbe = await app.inject({
+      method: 'POST',
+      url: '/api/source-adapters/pumch-public-dermatology-schedule/live-probe',
+      headers,
+    });
+    const createTask = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: {
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-20',
+        dateTo: '2026-07-20',
+        session: 'AM',
+        eventTypes: ['schedule_released'],
+        remindBeforeMinutes: 5,
+      },
+    });
+
+    for (const response of [notification, liveProbe, createTask]) {
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({
+        error: 'CLIENT_HEADER_REQUIRED',
+        message: '带 Origin 的写请求必须携带 x-easy-hospital-client: web',
+      });
+    }
+    expect(send).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+    const tasks = await app.inject({
+      method: 'GET',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1' },
+    });
+    expect(tasks.json().tasks).toHaveLength(0);
+  });
+
+  it('携带 x-easy-hospital-client: web 的 loopback Origin 无 body 写请求正常工作', async () => {
+    const send = vi.fn<NotificationChannel['send']>(async () => ({
+      status: 'accepted',
+      providerMessageId: 'provider-id',
+    }));
+    const channel: NotificationChannel = { key: 'csrf-ok', send };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-csrf-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      notificationChannelStatuses: [{ key: channel.key, enabled: true, reason: null }],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/notifications/${channel.key}/test`,
+      headers: {
+        host: '127.0.0.1',
+        origin: 'http://localhost:3000',
+        'x-easy-hospital-client': 'web',
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('Browser Agent observation 豁免 client 头，仍由 Bearer + 扩展 Origin 把关', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-csrf-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      browserAgentToken: 'a'.repeat(32),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/browser-agent/observations',
+      headers: {
+        host: '127.0.0.1',
+        origin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'content-type': 'application/json',
+      },
+      payload: {},
+    });
+    // 未被 client 头规则拦截（403 CLIENT_HEADER_REQUIRED），而是走到既有 Bearer 校验
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: 'BROWSER_AGENT_UNAUTHORIZED' });
   });
 });

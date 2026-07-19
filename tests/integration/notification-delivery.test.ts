@@ -74,6 +74,7 @@ describe('Outbox 到 NotificationChannel 的纵向切片', () => {
       sourceAdapters: [adapter],
       notificationChannels: [channel],
       workerPollMs: 5,
+      now: () => now,
     });
     const headers = { host: '127.0.0.1' };
     await app.inject({
@@ -134,6 +135,7 @@ describe('Outbox 到 NotificationChannel 的纵向切片', () => {
         '检测时间（北京时间）：2026-07-19 08:10:00',
         '证据：包含状态推断；来源：医院官方公开来源',
         '本批次共 2 项',
+        '本工具不代替人工预约，请前往官方渠道自行确认并完成预约。',
       ].join('\n'),
       officialEntryUrl: 'https://hospital.example/appointment',
       eventTags: [
@@ -207,6 +209,7 @@ describe('Outbox 到 NotificationChannel 的纵向切片', () => {
       sourceAdapters: [adapter],
       notificationChannels: [channel],
       workerPollMs: 5,
+      now: () => now,
     });
     const headers = { host: '127.0.0.1' };
     await app.inject({
@@ -264,6 +267,7 @@ describe('Outbox 到 NotificationChannel 的纵向切片', () => {
         '检测时间（北京时间）：2026-07-19 08:05:00',
         '证据：官方来源明确观测；来源：医院官方公开来源',
         '本批次共 1 项',
+        '本工具不代替人工预约，请前往官方渠道自行确认并完成预约。',
       ].join('\n'),
       officialEntryUrl: 'https://hospital.example/appointment',
       eventTags: ['schedule_released'],

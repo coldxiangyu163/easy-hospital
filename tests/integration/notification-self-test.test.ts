@@ -79,4 +79,36 @@ describe('通知渠道真实自检', () => {
       reason: 'missing_config',
     });
   });
+
+  it('连续自检时每个响应都是本次发送自己的回执', async () => {
+    let sequence = 0;
+    const channel: NotificationChannel = {
+      key: 'capture-sequence',
+      async send() {
+        sequence += 1;
+        return { status: 'accepted', providerMessageId: `provider-${sequence}` };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-self-test-seq-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      notificationChannelStatuses: [{ key: 'capture-sequence', enabled: true, reason: null }],
+    });
+    const headers = { host: '127.0.0.1' };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/notifications/capture-sequence/test',
+      headers,
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/notifications/capture-sequence/test',
+      headers,
+    });
+    expect(first.json()).toMatchObject({ providerMessageId: 'provider-1' });
+    expect(second.json()).toMatchObject({ providerMessageId: 'provider-2' });
+    expect(first.json().id).not.toBe(second.json().id);
+  });
 });

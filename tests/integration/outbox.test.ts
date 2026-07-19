@@ -68,6 +68,8 @@ describe('事件 Outbox 去重与冷却', () => {
     app = await buildApp({
       databasePath: join(directory, 'data.sqlite3'),
       sourceAdapters: [adapter],
+      // 固定时钟在聚合窗口关闭之前：批次保持 collecting，取消只能来自任务变更
+      now: () => Date.parse('2026-07-19T00:05:30.000Z'),
     });
     const headers = { host: '127.0.0.1' };
     const createdTaskResponse = await app.inject({

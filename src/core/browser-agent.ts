@@ -56,11 +56,13 @@ function isAllowedOfficialOrigin(value: string, scope: BrowserAgentScope): boole
 }
 
 function isAllowedStateCombination(observation: Observation): boolean {
+  // Browser Agent 只上报可见号源状态，从不观察排班发布；
+  // 只接受 scheduleStatus=unknown，排班存在与否不得由号源状态推导。
   return (
-    (observation.scheduleStatus === 'present' &&
-      (observation.availability === 'available' ||
-        observation.availability === 'unavailable')) ||
-    (observation.scheduleStatus === 'unknown' && observation.availability === 'unknown')
+    observation.scheduleStatus === 'unknown' &&
+    (observation.availability === 'available' ||
+      observation.availability === 'unavailable' ||
+      observation.availability === 'unknown')
   );
 }
 

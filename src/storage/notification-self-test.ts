@@ -48,7 +48,11 @@ export function recordNotificationSelfTest(
       ) VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(id, channel, result.status, providerMessageId, errorCode, testedAt);
-  return getLatestNotificationSelfTest(database, channel)!;
+  // 必须按 id 读回：并发自测时 getLatest 可能返回另一请求刚写入的记录。
+  const row = database
+    .prepare('SELECT * FROM notification_self_test WHERE id = ?')
+    .get(id) as NotificationSelfTestRow;
+  return toRecord(row);
 }
 
 export function getLatestNotificationSelfTest(

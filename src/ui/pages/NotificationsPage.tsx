@@ -17,6 +17,9 @@ function terminalReasonDetail(reason: string | null): string | undefined {
     TASK_CHANGED: '任务已修改，旧条件产生的提醒已取消。',
     TASK_INACTIVE: '任务已暂停，未发送旧提醒。',
     TASK_DELETED: '任务已删除，未发送旧提醒。',
+    EVENT_NOTIFICATION_STALE: '事件距检测已超过 15 分钟，已失去行动价值，不再补发。',
+    RULE_CHANGED: '放号规则已修改，基于旧规则的本次提醒已取消；新规则会重新安排。',
+    RULE_DELETED: '放号规则已删除，基于该规则的本次提醒已取消。',
   };
   return reason ? details[reason] ?? `终止原因：${reason}` : undefined;
 }
@@ -31,9 +34,22 @@ function notificationState(batch: NotificationBatch): { label: string; detail: s
     };
   }
   if (batch.state === 'failed') {
+    if (terminalDetail) {
+      return { label: '发送失败', detail: terminalDetail, className: styles.statusDanger };
+    }
+    const sentCount = (batch.deliveries ?? []).filter(
+      (delivery) => delivery.state === 'sent',
+    ).length;
+    if (sentCount > 0) {
+      return {
+        label: '部分送达',
+        detail: `${sentCount} 个渠道已接受消息，其余渠道失败。请检查失败渠道配置，并在已送达渠道确认到达。`,
+        className: styles.statusWarning,
+      };
+    }
     return {
       label: '发送失败',
-      detail: terminalDetail ?? '检测记录仍然保留。请检查真实通知渠道配置。',
+      detail: '检测记录仍然保留。请检查真实通知渠道配置。',
       className: styles.statusDanger,
     };
   }

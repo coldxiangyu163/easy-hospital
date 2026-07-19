@@ -32,7 +32,7 @@ MVP 发布至少要求全部 E1、E2 和真实渠道送达通过。只有 E3 通
 
 ### 1.3 不允许用 mock 替代的发布证据
 
-- HTTP 集成测试必须监听真实 loopback 端口并发送真实 HTTP 请求，不能只调用 handler。
+- HTTP 集成测试必须监听真实 loopback 端口并发送真实 HTTP 请求，不能只调用 handler。Host/Origin/转发头等安全边界证据由 `tests/integration/socket-security-boundary.test.ts` 以真实 socket 提供；其余 API 契约测试使用 `app.inject`，属于待补齐项，不能作为安全边界证据引用。
 - 数据库集成必须使用生产依赖 `better-sqlite3` 打开的真实磁盘文件，不能用对象仓库、其他 SQLite 驱动或 `:memory:` 代替。
 - Durable Job Runner 必须运行生产领取、状态转换、重试和恢复逻辑，不能在测试中改成直接函数调用。
 - UI E2E 必须启动真实 Chromium 和真实本地应用。
@@ -72,7 +72,7 @@ fixture 禁止保存完整请求头、`Cookie`、`Set-Cookie`、`Authorization`�
 | RC 全新 clone 本机 | 新数据目录 + 正式迁移 + 生产 Job Runner | fixture + live | 真实测试账号 | smoke、live、真实送达 |
 | 本机现场观察 | 生产形态数据目录 | live | 真实账号/设备 | E3 与稳定性 |
 
-所有产品时间以 `Asia/Shanghai` 展示，存储格式必须无歧义。测试同时覆盖 UTC 序列化、跨日、月末、年末、闰日、进程 `TZ` 错误和系统时钟小幅漂移。
+所有产品时间以 `Asia/Shanghai` 展示，存储格式必须无歧义。CI 门禁内的时间覆盖：UTC 序列化、跨日，以及放号提醒的月末、年末、闰日与清晨放号（UTC 小时为负）边界（`tests/integration/release-reminder-calendar-boundary.test.ts`）；UI 一律按 `Asia/Shanghai` 显式渲染。进程 `TZ` 错误不在 CI 门禁内：发布前在本机以非默认时区（如 `TZ=America/New_York`）运行 `npm test` 验证。系统时钟漂移目前只有 Browser Agent 入站的 ±60 秒防护与契约测试（`tests/contract/browser-agent/`），服务端调度对时钟跳变的容忍未做专项测试。
 
 ## 4. 关键领域测试
 

@@ -20,7 +20,7 @@ const validPayload = {
       session: 'AM' as const,
       doctorName: '医生甲',
       title: '主任医师',
-      scheduleStatus: 'present' as const,
+      scheduleStatus: 'unknown' as const,
       availability: 'available' as const,
       officialEntryUrl: 'https://pumchapp.pumch.cn/',
       evidence: 'explicit' as const,
@@ -84,12 +84,12 @@ describe('Browser Agent 服务端 payload 契约', () => {
       },
     ],
     [
-      '非法状态组合 unknown+available',
+      '非法状态组合 present+available',
       {
         observations: [
           {
             ...validPayload.observations[0],
-            scheduleStatus: 'unknown',
+            scheduleStatus: 'present',
             availability: 'available',
           },
         ],

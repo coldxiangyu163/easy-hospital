@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { ApiError, api, type Catalog, type WatchTaskInput } from '../api.js';
+import { ApiError, api, type Catalog, type EventType, type WatchTaskInput } from '../api.js';
 import { accessPolicy } from '../catalog.js';
 import styles from './pages.module.css';
+
+const EXPERIMENTAL_EVENT_TYPES: ReadonlyArray<{ value: EventType; label: string }> = [
+  { value: 'availability_changed_to_available', label: '实验性 B 级 · 从无号变为有号' },
+  { value: 'cancellation_slot_detected', label: '实验性 B 级 · 疑似退号回流（保守推断）' },
+];
 
 type CatalogState =
   | { status: 'loading' }
@@ -27,6 +32,12 @@ function todayInBeijing(): string {
   return `${value.year}-${value.month}-${value.day}`;
 }
 
+function addDateDays(dateKey: string, days: number): string {
+  const date = new Date(`${dateKey}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 export function TaskFormPage() {
   const navigate = useNavigate();
   const { taskId } = useParams();
@@ -42,6 +53,10 @@ export function TaskFormPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [session, setSession] = useState<WatchTaskInput['session']>('ANY');
+  const [experimentalEventTypes, setExperimentalEventTypes] = useState<EventType[]>([]);
+  const [browserAgentConfigured, setBrowserAgentConfigured] = useState(false);
+  // 提醒分钟不再硬编码：编辑保留后端原值（含 null），新建 C 级默认 5、A/B 级默认 null。
+  const [remindBeforeMinutes, setRemindBeforeMinutes] = useState<number | null>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
@@ -53,8 +68,10 @@ export function TaskFormPage() {
     Promise.all([
       api.catalog(controller.signal),
       taskId ? api.task(taskId, controller.signal) : Promise.resolve(null),
+      // runtime-status 失败时按未配置处理：隐藏实验事件勾选，但不阻塞表单主流程。
+      api.runtimeStatus(controller.signal).catch(() => null),
     ]).then(
-      ([catalog, task]) => {
+      ([catalog, task, runtime]) => {
         const firstHospital = catalog.hospitals[0];
         const firstCampus = firstHospital?.campuses[0];
         const firstDepartment = firstCampus?.departments[0];
@@ -67,6 +84,19 @@ export function TaskFormPage() {
         setDateFrom(task?.dateFrom ?? '');
         setDateTo(task?.dateTo ?? '');
         setSession(task?.session ?? 'ANY');
+        setRemindBeforeMinutes(
+          task
+            ? task.remindBeforeMinutes
+            : accessPolicy(firstHospital?.id ?? '').level === 'C'
+              ? 5
+              : null,
+        );
+        // 编辑时必须保留后端原 eventTypes：勾选状态由原值初始化，保存时按勾选提交，
+        // 不做硬编码覆盖；Browser Agent 未配置时勾选控件隐藏，原值随 state 原样带回。
+        setExperimentalEventTypes(
+          (task?.eventTypes ?? []).filter((type) => type !== 'schedule_released'),
+        );
+        setBrowserAgentConfigured(Boolean(runtime?.browserAgent.configured));
         setVersion(task?.version ?? null);
         setCatalogState({ status: 'loaded', catalog });
       },
@@ -94,6 +124,14 @@ export function TaskFormPage() {
     () => titles.split(/[，,]/).map((item) => item.trim()).filter(Boolean),
     [titles],
   );
+  const earliestDate = todayInBeijing();
+  const latestDate = addDateDays(earliestDate, 14);
+
+  function toggleExperimentalEventType(type: EventType, checked: boolean) {
+    setExperimentalEventTypes((current) =>
+      checked ? [...new Set([...current, type])] : current.filter((item) => item !== type),
+    );
+  }
 
   function changeHospital(nextHospitalId: string) {
     if (catalogState.status !== 'loaded') return;
@@ -102,6 +140,8 @@ export function TaskFormPage() {
     setHospitalId(nextHospitalId);
     setCampusId(campus?.id ?? '');
     setDepartmentId(campus?.departments[0]?.id ?? '');
+    // 用户主动切换医院才按新来源等级重置：C 级规则提醒默认提前 5 分钟，A/B 级无规则提醒。
+    setRemindBeforeMinutes(accessPolicy(nextHospitalId).level === 'C' ? 5 : null);
   }
 
   function changeCampus(nextCampusId: string) {
@@ -115,7 +155,8 @@ export function TaskFormPage() {
     const nextErrors: FormErrors = {};
     if (!dateFrom) nextErrors.dateFrom = '请选择开始日期。';
     if (!dateTo) nextErrors.dateTo = '请选择结束日期。';
-    if (dateFrom && dateFrom < todayInBeijing()) nextErrors.dateFrom = '不能选择今天之前的日期。';
+    if (dateFrom && dateFrom < earliestDate) nextErrors.dateFrom = '不能选择今天之前的日期。';
+    if (dateTo && dateTo > latestDate) nextErrors.dateTo = '最多可选择北京时间今天起 14 天内的日期。';
     if (dateFrom && dateTo && dateTo < dateFrom) nextErrors.dateTo = '结束日期不能早于开始日期。';
     if (dateFrom && dateTo && dateSpanInDays(dateFrom, dateTo) > 14) {
       nextErrors.dateTo = '日期范围最多为连续 14 天。';
@@ -141,8 +182,11 @@ export function TaskFormPage() {
       dateFrom,
       dateTo,
       session: ruleOnly ? 'ANY' : session,
-      eventTypes: ['schedule_released'],
-      remindBeforeMinutes: 5,
+      // schedule_released 始终保留：C 级规则提醒依赖它；实验事件只在勾选时附加。
+      eventTypes: ruleOnly
+        ? ['schedule_released']
+        : (['schedule_released', ...experimentalEventTypes] as EventType[]),
+      remindBeforeMinutes,
     };
     try {
       const task = editing && taskId && version !== null
@@ -249,12 +293,12 @@ export function TaskFormPage() {
           ) : null}
           <div className={styles.field}>
             <label htmlFor="date-from">开始日期</label>
-            <input id="date-from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-invalid={Boolean(errors.dateFrom)} aria-describedby={errors.dateFrom ? 'date-from-error' : undefined} />
+            <input id="date-from" type="date" min={earliestDate} max={latestDate} value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-invalid={Boolean(errors.dateFrom)} aria-describedby={errors.dateFrom ? 'date-from-error' : undefined} />
             {errors.dateFrom ? <p id="date-from-error" className={styles.fieldError}>{errors.dateFrom}</p> : null}
           </div>
           <div className={styles.field}>
             <label htmlFor="date-to">结束日期</label>
-            <input id="date-to" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-invalid={Boolean(errors.dateTo)} aria-describedby={errors.dateTo ? 'date-to-error' : undefined} />
+            <input id="date-to" type="date" min={earliestDate} max={latestDate} value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-invalid={Boolean(errors.dateTo)} aria-describedby={errors.dateTo ? 'date-to-error' : undefined} />
             {errors.dateTo ? <p id="date-to-error" className={styles.fieldError}>{errors.dateTo}</p> : null}
           </div>
           {!ruleOnly ? (
@@ -275,7 +319,31 @@ export function TaskFormPage() {
           {ruleOnly ? (
             <p>只使用医院、科室、日期和已记录规则；医生、职称与时段不会参与判断。规则标记需复核时，提醒会明确要求回到官方渠道确认。</p>
           ) : (
-            <p>事件：新排班发布后最多 60 秒聚合通知。公开来源不提供固定放号前提醒，也不检测排班移除。</p>
+            <>
+              <p>事件：新排班发布后最多 60 秒聚合通知。公开来源不提供固定放号前提醒，也不检测排班移除。</p>
+              <div role="group" aria-label="事件类型">
+                <label>
+                  <input type="checkbox" checked disabled readOnly /> 新排班发布（始终包含）
+                </label>
+                {browserAgentConfigured
+                  ? EXPERIMENTAL_EVENT_TYPES.map((item) => (
+                      <label key={item.value}>
+                        <input
+                          type="checkbox"
+                          checked={experimentalEventTypes.includes(item.value)}
+                          onChange={(event) =>
+                            toggleExperimentalEventType(item.value, event.target.checked)
+                          }
+                        />{' '}
+                        {item.label}
+                      </label>
+                    ))
+                  : null}
+              </div>
+              {browserAgentConfigured ? (
+                <p>实验性 B 级事件来自本机 Browser Agent 的用户主动读取，只代表读取时可见状态，可能立即失效；不勾选则只接收新排班发布提醒。</p>
+              ) : null}
+            </>
           )}
         </section>
 

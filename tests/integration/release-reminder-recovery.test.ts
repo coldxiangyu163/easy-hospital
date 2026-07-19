@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { NotificationChannel } from '../../src/core/notification-channel.js';
+import type { NotificationChannel, NotificationMessage } from '../../src/core/notification-channel.js';
 import { buildApp } from '../../src/server/app.js';
 import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
 import { SqliteJobRunner } from '../../src/storage/job-runner.js';
@@ -189,5 +189,251 @@ describe('Release reminder 恢复状态机', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(channelACalls).toBe(1);
     expect(channelBCalls).toBe(2);
+  });
+
+  const reminderTaskPayload = {
+    hospitalId: 'hospital-tongren',
+    campusId: 'campus-tongren-chongwenmen',
+    departmentId: 'department-tongren-rhinology',
+    matchMode: 'any_expert',
+    doctorName: null,
+    titles: [],
+    dateFrom: '2026-07-26',
+    dateTo: '2026-07-27',
+    session: 'ANY',
+    eventTypes: ['schedule_released'],
+    remindBeforeMinutes: 5,
+  };
+
+  it('计划提醒被 claim 后崩溃，超过 5 分钟恢复不补发且记为 missed', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    let sends = 0;
+    const channel: NotificationChannel = {
+      key: 'reminder-crash-channel',
+      async send() {
+        sends += 1;
+        return { status: 'accepted', providerMessageId: 'must-not-send' };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-crash-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const options = {
+      databasePath,
+      notificationChannels: [channel],
+      workerPollMs: 60_000,
+      now: () => now,
+    };
+    app = await buildApp(options);
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: reminderTaskPayload,
+    });
+
+    // 到达计划提醒时刻：job 被 claim（lease 30s）后进程直接崩溃
+    now = Date.parse('2026-07-19T06:55:00.000Z');
+    database = openDatabase(databasePath);
+    const claimed = new SqliteJobRunner(database).claimNext({ now, leaseMs: 30_000 });
+    expect(claimed).toMatchObject({ type: 'release-reminder', state: 'running' });
+    database.close();
+    database = undefined;
+    await app.close();
+    app = undefined;
+
+    // 10 分钟后重启：LEASE_EXPIRED 恢复会把 run_at 改写为恢复时刻，
+    // 但 missed 判定必须基于 payload 中不可变的 reminderAt。
+    now = Date.parse('2026-07-19T07:05:00.000Z');
+    app = await buildApp({ ...options, workerPollMs: 5 });
+    await expect
+      .poll(
+        async () =>
+          (
+            await app!.inject({ method: 'GET', url: '/api/notification-batches', headers })
+          ).json().batches[0],
+        { timeout: 1_000 },
+      )
+      .toMatchObject({
+        state: 'failed',
+        terminalReason: 'RELEASE_REMINDER_MISSED',
+        deliveries: [
+          expect.objectContaining({
+            state: 'failed',
+            errorCode: 'RELEASE_REMINDER_MISSED',
+            attempts: 0,
+          }),
+        ],
+      });
+    expect(sends).toBe(0);
+  });
+
+  it('重试等待期间越过错过窗口，批次进入 missed 终态而非永久悬挂', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    const reminderAt = Date.parse('2026-07-19T06:55:00.000Z');
+    let sends = 0;
+    const channel: NotificationChannel = {
+      key: 'reminder-flaky',
+      async send() {
+        sends += 1;
+        return { status: 'rejected', errorCode: 'TEMPORARY', retryable: true };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-missed-retry-'));
+    const options = {
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      workerPollMs: 5,
+      now: () => now,
+    };
+    app = await buildApp(options);
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: reminderTaskPayload,
+    });
+
+    now = reminderAt;
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
+
+    // 首轮失败 retryAt=+60s；休眠到 reminderAt+400s（距计划 > 300s）
+    now = reminderAt + 400_000;
+    await expect
+      .poll(
+        async () =>
+          (
+            await app!.inject({ method: 'GET', url: '/api/notification-batches', headers })
+          ).json().batches[0],
+        { timeout: 1_000 },
+      )
+      .toMatchObject({
+        state: 'failed',
+        terminalReason: 'RELEASE_REMINDER_MISSED',
+        deliveries: [
+          expect.objectContaining({
+            state: 'failed',
+            errorCode: 'RELEASE_REMINDER_MISSED',
+            attempts: 1,
+          }),
+        ],
+      });
+    now += 600_000;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sends).toBe(1);
+  });
+
+  it('重试等待期间移除全部通知渠道，重启后批次进入诚实终态', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    const reminderAt = Date.parse('2026-07-19T06:55:00.000Z');
+    let sends = 0;
+    const doomed: NotificationChannel = {
+      key: 'doomed',
+      async send() {
+        sends += 1;
+        return { status: 'rejected', errorCode: 'TEMPORARY', retryable: true };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-channel-removed-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    app = await buildApp({
+      databasePath,
+      notificationChannels: [doomed],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: reminderTaskPayload,
+    });
+
+    now = reminderAt;
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
+    await app.close();
+    app = undefined;
+
+    now = reminderAt + 60_000;
+    app = await buildApp({
+      databasePath,
+      notificationChannels: [],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    await expect
+      .poll(
+        async () =>
+          (
+            await app!.inject({ method: 'GET', url: '/api/notification-batches', headers })
+          ).json().batches[0],
+        { timeout: 1_000 },
+      )
+      .toMatchObject({
+        state: 'failed',
+        terminalReason: 'NOTIFICATION_CHANNEL_NOT_FOUND',
+        deliveries: [
+          expect.objectContaining({
+            state: 'failed',
+            errorCode: 'NOTIFICATION_CHANNEL_NOT_FOUND',
+          }),
+        ],
+      });
+    expect(sends).toBe(1);
+  });
+
+  it('提醒正文使用目录名称与规则核验日期，messageId 与持久化值一致', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-copy-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    // 改动目录种子名称：若正文来自硬编码而不是 catalog join，此测试立即失败
+    database = openDatabase(databasePath);
+    database.prepare("UPDATE hospital SET name = '测试总医院' WHERE id = 'hospital-tongren'").run();
+    database
+      .prepare("UPDATE campus SET name = '测试院区' WHERE id = 'campus-tongren-chongwenmen'")
+      .run();
+    database
+      .prepare("UPDATE department SET name = '测试科' WHERE id = 'department-tongren-rhinology'")
+      .run();
+    database.close();
+    database = undefined;
+
+    const received: NotificationMessage[] = [];
+    const channel: NotificationChannel = {
+      key: 'capture-reminder-copy',
+      async send(message) {
+        received.push(message);
+        return { status: 'accepted', providerMessageId: 'reminder-copy-provider' };
+      },
+    };
+    app = await buildApp({
+      databasePath,
+      notificationChannels: [channel],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: reminderTaskPayload,
+    });
+
+    now = Date.parse('2026-07-19T06:55:00.000Z');
+    await expect.poll(() => received.length, { timeout: 1_000 }).toBe(1);
+    expect(received[0]!.text).toContain('测试总医院 · 测试院区 · 测试科');
+    expect(received[0]!.text).toContain('规则最后核验日期：2026-07-19');
+    expect(received[0]!.text).toContain('需要重新核验');
+    expect(received[0]!.text).toContain('不代替人工预约');
+    expect(received[0]!.text).not.toContain('可用号源');
+
+    const batch = (
+      await app.inject({ method: 'GET', url: '/api/notification-batches', headers })
+    ).json().batches[0];
+    expect(received[0]!.messageId).toBe(batch.deliveries[0].messageId);
+    expect(received[0]!.messageId).toContain('release-reminder:');
   });
 });

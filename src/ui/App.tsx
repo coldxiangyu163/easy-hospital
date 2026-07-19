@@ -43,8 +43,16 @@ export function App() {
 
   useEffect(() => {
     document.title = `${routeLabel(location.pathname)} · 北京挂号雷达`;
-    const activeLink = navRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
-    activeLink?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
+    // 直接滚动 nav 容器而不是调用 scrollIntoView：后者会移动浏览器的顺序焦点起点，
+    // 导致页面加载后第一次 Tab 跳过「跳到主要内容」链接和当前导航项。
+    const nav = navRef.current;
+    const activeLink = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (nav && activeLink) {
+      const navRect = nav.getBoundingClientRect();
+      const linkRect = activeLink.getBoundingClientRect();
+      const centerOffset = linkRect.left - navRect.left - (nav.clientWidth - linkRect.width) / 2;
+      nav.scrollLeft = Math.max(0, nav.scrollLeft + centerOffset);
+    }
 
     if (previousPath.current !== location.pathname) {
       mainRef.current?.focus();
@@ -53,7 +61,7 @@ export function App() {
   }, [location.pathname]);
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} id="app-shell">
       <a className={styles.skipLink} href="#main-content">
         跳到主要内容
       </a>

@@ -29,6 +29,14 @@ describe('Browser Agent admission migration', () => {
         last_ingest_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL
       ) STRICT;
+      CREATE TABLE hospital (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        official_url TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO hospital (id, name, official_url) VALUES
+        ('hospital-pumch', '北京协和医院', 'https://www.pumch.cn/'),
+        ('hospital-tongren', '北京同仁医院', 'https://www.trhos.com/');
       INSERT INTO browser_agent_runtime (source_id, last_ingest_at, last_seen_at)
       VALUES ('legacy-source', 1000, 1000);
     `);

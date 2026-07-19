@@ -87,4 +87,66 @@ describe('通知记录', () => {
       batch.officialEntryUrl,
     );
   });
+
+  it('failed 但存在已接受渠道时显示「部分送达」而非整体失败', async () => {
+    const partialBatch = {
+      ...batch,
+      id: 'batch-partial',
+      state: 'failed',
+      terminalReason: null,
+      deliveries: [
+        { channel: 'macos', state: 'sent', attempts: 1, messageId: 'm-1', errorCode: null },
+        { channel: 'bark', state: 'failed', attempts: 4, messageId: 'm-2', errorCode: 'BARK_HTTP_500' },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/notification-batches') return jsonResponse({ batches: [partialBatch] });
+      if (path === '/api/watch-tasks') return jsonResponse({ tasks: [task] });
+      if (path === '/api/catalog') return jsonResponse(catalog);
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/notifications']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('部分送达')).toBeInTheDocument();
+    expect(
+      screen.getByText('1 个渠道已接受消息，其余渠道失败。请检查失败渠道配置，并在已送达渠道确认到达。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('发送失败')).not.toBeInTheDocument();
+  });
+
+  it('陈旧事件终态展示诚实原因，不伪装准时送达', async () => {
+    const staleBatch = {
+      ...batch,
+      id: 'batch-stale',
+      state: 'failed',
+      terminalReason: 'EVENT_NOTIFICATION_STALE',
+      deliveries: [],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/notification-batches') return jsonResponse({ batches: [staleBatch] });
+      if (path === '/api/watch-tasks') return jsonResponse({ tasks: [task] });
+      if (path === '/api/catalog') return jsonResponse(catalog);
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/notifications']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('发送失败')).toBeInTheDocument();
+    expect(
+      screen.getByText('事件距检测已超过 15 分钟，已失去行动价值，不再补发。'),
+    ).toBeInTheDocument();
+  });
 });

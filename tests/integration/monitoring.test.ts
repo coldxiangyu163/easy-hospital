@@ -470,6 +470,122 @@ describe('Observation 到事件的 HTTP /api 纵向切片', () => {
     });
   });
 
+  it('PARTIAL 空结果不建立基线，恢复后的 OK 全量先静默建基线再报新增', async () => {
+    let attempt = 0;
+    const adapter: SourceAdapter = {
+      manifest: {
+        adapterKey: 'fixture-partial-baseline',
+        contractVersion: 1,
+        version: '1.0.0',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['hospital.example'],
+        minIntervalMs: 300_000,
+      },
+      async check() {
+        attempt += 1;
+        if (attempt === 1) {
+          return {
+            status: 'PARTIAL' as const,
+            observedAt: '2026-07-19T00:00:00.000Z',
+            nextAllowedAt: null,
+            contentHash: hash('partial-empty'),
+            observations: [],
+          };
+        }
+        const slotA = {
+          slotKey: 'partial-slot-a',
+          hospitalId: 'hospital-pumch',
+          campusId: 'campus-pumch-dongdan',
+          departmentId: 'department-pumch-dermatology',
+          date: '2026-07-20',
+          session: 'AM' as const,
+          doctorName: '医生甲',
+          title: null,
+          scheduleStatus: 'present' as const,
+          availability: 'unknown' as const,
+          officialEntryUrl: 'https://hospital.example/appointment',
+          evidence: 'explicit' as const,
+        };
+        const slotB = {
+          ...slotA,
+          slotKey: 'partial-slot-b',
+          doctorName: '医生乙',
+        };
+        return {
+          status: 'OK' as const,
+          observedAt: `2026-07-19T00:0${attempt}:00.000Z`,
+          nextAllowedAt: null,
+          contentHash: hash(`partial-ok-${attempt}`),
+          observations: attempt === 2 ? [slotA] : [slotA, slotB],
+        };
+      },
+    };
+
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-monitoring-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      sourceAdapters: [adapter],
+    });
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: {
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-20',
+        dateTo: '2026-07-26',
+        session: 'AM',
+        eventTypes: ['schedule_released'],
+        remindBeforeMinutes: 5,
+      },
+    });
+    const payload = {
+      requestId: 'partial-1',
+      sourceId: 'source-partial-baseline',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      dateFrom: '2026-07-20',
+      dateTo: '2026-07-26',
+      doctorName: null,
+      titles: [],
+      session: 'AM',
+      deadlineAt: '2026-07-19T00:10:00.000Z',
+    };
+
+    const eventCounts: number[] = [];
+    for (let index = 1; index <= 3; index += 1) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/source-checks/fixture-partial-baseline',
+        headers,
+        payload: { ...payload, requestId: `partial-${index}` },
+      });
+      expect(response.statusCode).toBe(200);
+      eventCounts.push(response.json().eventsCreated);
+    }
+
+    // PARTIAL 空轮不建基线 → OK 全量轮只静默建基线(slotA 不报) → 后续仅新增 slotB 报一次
+    expect(eventCounts).toEqual([0, 0, 1]);
+    const events = (
+      await app.inject({ method: 'GET', url: '/api/events', headers })
+    ).json().events;
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      eventType: 'schedule_released',
+      slotKey: 'partial-slot-b',
+      fromState: 'absent',
+      toState: 'present',
+    });
+  });
+
   it('最近 30 分钟明确无号后变为有号时生成疑似退号事件', async () => {
     let attempt = 0;
     const adapter: SourceAdapter = {

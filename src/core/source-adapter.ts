@@ -66,13 +66,52 @@ export interface SourceAdapter {
   check(request: CheckRequest): Promise<CheckResult>;
 }
 
+export class SourceAdapterDeadlineError extends Error {
+  readonly code = 'SOURCE_ADAPTER_DEADLINE_EXCEEDED';
+
+  constructor(readonly deadlineAt: string) {
+    super(`来源检查超过契约时限 ${deadlineAt}`);
+    this.name = 'SourceAdapterDeadlineError';
+  }
+}
+
+// 契约层兜底：adapter 实现可能忽略 request.deadlineAt（deadline 至今只是
+// 约定参数），一个卡死的 check 会拖停单进程 worker 并让 shutdown 无限等待。
+// 这里只在「尚有剩余时间」时武装超时；deadlineAt 已过期的调用保持既有语义，
+// 交由 adapter 自诊断（如 pumch 返回 PUMCH_DEADLINE_EXCEEDED），不在契约层抛错。
+async function checkWithContractDeadline(
+  adapter: SourceAdapter,
+  input: CheckRequest,
+): Promise<CheckResult> {
+  const deadlineMs = Date.parse(input.deadlineAt);
+  const remainingMs = deadlineMs - Date.now();
+  if (!Number.isFinite(deadlineMs) || remainingMs <= 0) {
+    return adapter.check(input);
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Promise.race 在创建时已为双方注册 settled 处理：超时胜出后 adapter 迟到的
+  // resolve/reject 都会被既有 handler 吸收，不会产生未处理 rejection。
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new SourceAdapterDeadlineError(input.deadlineAt)),
+      remainingMs,
+    );
+  });
+  try {
+    return await Promise.race([adapter.check(input), expired]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export async function runSourceAdapter(
   adapter: SourceAdapter,
   request: CheckRequest,
 ): Promise<CheckResult> {
   const manifest = sourceManifestSchema.parse(adapter.manifest);
   const input = checkRequestSchema.parse(request);
-  const result = checkResultSchema.parse(await adapter.check(input));
+  const result = checkResultSchema.parse(await checkWithContractDeadline(adapter, input));
 
   for (const observation of result.observations) {
     const hostname = new URL(observation.officialEntryUrl).hostname;

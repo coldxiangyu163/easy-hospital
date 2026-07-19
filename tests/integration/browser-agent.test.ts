@@ -32,7 +32,7 @@ describe('B 级本机 Browser Agent ingest seam', () => {
         session: 'AM',
         doctorName: '示例医生',
         title: '主任医师',
-        scheduleStatus: 'present',
+        scheduleStatus: 'unknown',
         availability: 'unavailable',
         officialEntryUrl: 'https://pumchapp.pumch.cn/',
         evidence: 'explicit',
@@ -125,5 +125,126 @@ describe('B 级本机 Browser Agent ingest seam', () => {
       expect(response.body).not.toContain(secret);
       expect(response.body).not.toContain(token);
     }
+  });
+
+  it('拒绝任何 scheduleStatus=present 的 observation(排班不得由号源推导)', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-browser-agent-'));
+    const token = 'schedule-inference-secret';
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      browserAgentToken: token,
+      now: () => Date.parse(payload.observedAt),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/browser-agent/observations',
+      headers: { host: '127.0.0.1', authorization: `Bearer ${token}` },
+      payload: {
+        ...payload,
+        requestId: 'schedule-inference-1',
+        observations: [{ ...payload.observations[0], scheduleStatus: 'present' }],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('只产生 availability/cancellation 事件，永不产生 schedule_released', async () => {
+    let tick = Date.parse('2026-07-19T01:00:00.000Z');
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-browser-agent-'));
+    const token = 'availability-events-secret';
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      browserAgentToken: token,
+      now: () => tick,
+    });
+    const uiHeaders = {
+      host: '127.0.0.1',
+      origin: 'http://127.0.0.1:3210',
+      'x-easy-hospital-client': 'web',
+    };
+    const createdTask = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: uiHeaders,
+      payload: {
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-20',
+        dateTo: '2026-07-26',
+        session: 'AM',
+        eventTypes: [
+          'schedule_released',
+          'availability_changed_to_available',
+          'cancellation_slot_detected',
+        ],
+        remindBeforeMinutes: null,
+      },
+    });
+    expect(createdTask.statusCode).toBe(201);
+
+    const headers = { host: '127.0.0.1', authorization: `Bearer ${token}` };
+    const makeObservation = (doctor: string, availability: 'available' | 'unavailable') => ({
+      slotKey: `browser-agent:hospital-pumch:campus-pumch-dongdan:department-pumch-dermatology:2026-07-20:AM:${encodeURIComponent(doctor)}:*`,
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      date: '2026-07-20',
+      session: 'AM',
+      doctorName: doctor,
+      title: null,
+      scheduleStatus: 'unknown',
+      availability,
+      officialEntryUrl: 'https://pumchapp.pumch.cn/',
+      evidence: 'explicit',
+    });
+    const submit = async (
+      requestId: string,
+      observations: Array<ReturnType<typeof makeObservation>>,
+    ) =>
+      app!.inject({
+        method: 'POST',
+        url: '/api/browser-agent/observations',
+        headers,
+        payload: {
+          sourceId: 'browser-agent-hospital-pumch',
+          requestId,
+          observedAt: new Date(tick).toISOString(),
+          observations,
+        },
+      });
+
+    // 第一轮：明确无号(建立基线与明确状态)
+    const first = await submit('avail-1', [makeObservation('医生甲', 'unavailable')]);
+    expect(first.statusCode).toBe(202);
+    expect(first.json().eventsCreated).toBe(0);
+
+    // 第二轮(5 分钟后)：同一 slot 变为有号 → availability + 疑似退号,绝无 schedule_released
+    tick += 300_001;
+    const second = await submit('avail-2', [makeObservation('医生甲', 'available')]);
+    expect(second.statusCode).toBe(202);
+    expect(second.json().eventsCreated).toBe(2);
+
+    // 第三轮(再 5 分钟后)：新医生 slot 直接有号 → 不推导排班发布，不产任何事件
+    tick += 300_001;
+    const third = await submit('avail-3', [makeObservation('医生乙', 'available')]);
+    expect(third.statusCode).toBe(202);
+    expect(third.json().eventsCreated).toBe(0);
+
+    const events = (
+      await app!.inject({ method: 'GET', url: '/api/events', headers: { host: '127.0.0.1' } })
+    ).json().events;
+    expect(events).toHaveLength(2);
+    expect(events.map((event: { eventType: string }) => event.eventType).sort()).toEqual([
+      'availability_changed_to_available',
+      'cancellation_slot_detected',
+    ]);
+    expect(
+      events.some((event: { eventType: string }) => event.eventType === 'schedule_released'),
+    ).toBe(false);
   });
 });

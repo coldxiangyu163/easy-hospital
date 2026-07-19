@@ -19,13 +19,17 @@ import {
   runSourceAdapter,
   type SourceAdapter,
 } from '../core/source-adapter.js';
-import { watchTaskInputSchema, watchTaskPatchSchema } from '../core/watch-task.js';
+import {
+  validateWatchTaskDateWindow,
+  watchTaskInputSchema,
+  watchTaskPatchSchema,
+} from '../core/watch-task.js';
 import {
   assessBrowserAgentIngest,
   getLatestBrowserAgentSeenAt,
   recordBrowserAgentIngest,
 } from '../storage/browser-agent.js';
-import { openDatabase, readCatalog } from '../storage/database.js';
+import { openDatabase, readCatalog, type SqliteDatabase } from '../storage/database.js';
 import { SqliteJobRunner } from '../storage/job-runner.js';
 import {
   applyCheckResult,
@@ -37,8 +41,13 @@ import {
   getLatestNotificationSelfTest,
   recordNotificationSelfTest,
 } from '../storage/notification-self-test.js';
-import { scheduleWatchTask } from '../storage/scheduling.js';
 import {
+  cancelPendingReleaseReminderJobs,
+  rescheduleReleaseRemindersForRule,
+  scheduleWatchTask,
+} from '../storage/scheduling.js';
+import {
+  getSourceRuntime,
   recordSourceAttempt,
   recordSourceResult,
   sourceRetryAfterMs,
@@ -61,6 +70,11 @@ import {
 import { LocalWorker } from './local-worker.js';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
+// 浏览器“简单请求”无法携带自定义头；要求带 Origin 的写请求必须携带该头，
+// 等效于 CSRF token（自定义头会触发预检，跨站页面无法发出）。
+const CLIENT_HEADER = 'x-easy-hospital-client';
+const CLIENT_HEADER_VALUE = 'web';
 
 function requestHostname(hostHeader: string | undefined): string | undefined {
   if (!hostHeader) return undefined;
@@ -107,6 +121,65 @@ function isChromeExtensionOrigin(value: string): boolean {
   }
 }
 
+// 影响提醒调度/内容一致性的规则字段：仅这些字段实际变化时才取消旧 job 并重排；
+// verifiedAt/confidence/needsReconfirmation/sameDayPolicy 等更新不影响调度，
+// 运行中的 worker 会读取当前规则渲染正文与提示。
+const RULE_RESCHEDULE_FIELDS = [
+  'hospitalId',
+  'campusId',
+  'departmentId',
+  'advanceDays',
+  'releaseTimeLocal',
+  'officialEntryUrl',
+  'enabled',
+] as const;
+
+// 写入前预校验 catalog 范围，把非法 hospital/campus/department 稳定映射为 400，
+// 避免依赖 SQLite FOREIGN KEY 约束失败（会变成 500）。
+function catalogScopeExists(
+  database: SqliteDatabase,
+  scope: { hospitalId: string; campusId: string | null; departmentId: string },
+): boolean {
+  const row =
+    scope.campusId === null
+      ? database
+          .prepare('SELECT 1 AS found FROM department WHERE id = ? AND hospital_id = ?')
+          .get(scope.departmentId, scope.hospitalId)
+      : database
+          .prepare(
+            'SELECT 1 AS found FROM department WHERE id = ? AND hospital_id = ? AND campus_id = ?',
+          )
+          .get(scope.departmentId, scope.hospitalId, scope.campusId);
+  return row !== undefined;
+}
+
+function watchTaskPolicyAllows(input: {
+  hospitalId: string;
+  departmentId: string;
+  matchMode: 'any_expert' | 'title' | 'doctor';
+  doctorName: string | null;
+  titles: string[];
+  session: 'ANY' | 'AM' | 'PM';
+  eventTypes: string[];
+  remindBeforeMinutes: number | null;
+}): boolean {
+  if (
+    input.hospitalId !== 'hospital-tongren' ||
+    input.departmentId !== 'department-tongren-rhinology'
+  ) {
+    return true;
+  }
+  return (
+    input.matchMode === 'any_expert' &&
+    input.doctorName === null &&
+    input.titles.length === 0 &&
+    input.session === 'ANY' &&
+    input.eventTypes.length === 1 &&
+    input.eventTypes[0] === 'schedule_released' &&
+    input.remindBeforeMinutes !== null
+  );
+}
+
 export type NotificationChannelStatus = {
   key: string;
   enabled: boolean;
@@ -126,6 +199,8 @@ export type BuildAppOptions = {
   serveStatic?: boolean;
   now?: () => number;
   enforceSourceRateLimit?: boolean;
+  enforceTaskDateWindow?: boolean;
+  enforceWatchTaskPolicy?: boolean;
 };
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
@@ -148,12 +223,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         message: '本地数据正忙，请稍后重试',
       });
     }
+    const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;
+    if (statusCode >= 500) {
+      // 5xx 对外统一脱敏：不回显内部错误 code/message（SQL、schema、路径等）。
+      return reply.code(500).send({ error: 'INTERNAL_ERROR' });
+    }
     return reply.send(error);
   });
   const database = openDatabase(options.databasePath);
   const now = options.now ?? Date.now;
   const enforceSourceRateLimit =
     options.enforceSourceRateLimit ?? process.env.NODE_ENV !== 'test';
+  const enforceTaskDateWindow =
+    options.enforceTaskDateWindow ?? process.env.NODE_ENV !== 'test';
+  const enforceWatchTaskPolicy =
+    options.enforceWatchTaskPolicy ?? process.env.NODE_ENV !== 'test';
   const staticAvailable = serveStatic;
   if (staticAvailable) {
     await app.register(fastifyStatic, {
@@ -192,7 +276,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       enabled: Boolean(options.browserAgentToken),
       transport: 'local-agent',
       minIntervalMs: 300_000,
-      capabilities: { schedule: true, availability: true, cancellation: true, ruleReminder: false },
+      capabilities: { schedule: false, availability: true, cancellation: true, ruleReminder: false },
     },
     {
       key: 'tongren-rhinology-rules',
@@ -203,6 +287,27 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       capabilities: { schedule: false, availability: false, cancellation: false, ruleReminder: true },
     },
   ];
+  const sourceCapabilitiesWithRuntime = () =>
+    sourceCapabilities.map((capability) => {
+      const runtime = getSourceRuntime(database, capability.key);
+      return {
+        ...capability,
+        runtime: runtime
+          ? {
+              lastAttemptAt:
+                runtime.lastAttemptAt === null
+                  ? null
+                  : new Date(runtime.lastAttemptAt).toISOString(),
+              lastSuccessAt:
+                runtime.lastSuccessAt === null
+                  ? null
+                  : new Date(runtime.lastSuccessAt).toISOString(),
+              lastStatus: runtime.lastStatus,
+              lastErrorCode: runtime.lastErrorCode,
+            }
+          : null,
+      };
+    });
   const jobRunner = new SqliteJobRunner(database);
   const startupNow = now();
   for (const task of listWatchTasks(database)) {
@@ -241,6 +346,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           message: '请求 Origin 不在本机允许范围内',
         });
       }
+      if (
+        !isBrowserAgentObservation &&
+        request.headers[CLIENT_HEADER] !== CLIENT_HEADER_VALUE
+      ) {
+        return reply.code(403).send({
+          error: 'CLIENT_HEADER_REQUIRED',
+          message: `带 Origin 的写请求必须携带 ${CLIENT_HEADER}: ${CLIENT_HEADER_VALUE}`,
+        });
+      }
     }
   });
 
@@ -251,11 +365,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get('/api/health', async () => {
     database.prepare('SELECT 1').get();
+    const workerHealth = worker.health();
     return {
-      status: 'healthy',
+      status: workerHealth.status === 'healthy' ? 'healthy' : 'degraded',
       checks: {
         storage: { status: 'healthy' },
-        worker: worker.health(),
+        worker: workerHealth,
       },
     };
   });
@@ -279,11 +394,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           return lastSeenAt === undefined ? null : new Date(lastSeenAt).toISOString();
         })(),
       },
-      sourceCapabilities,
+      sourceCapabilities: sourceCapabilitiesWithRuntime(),
     };
   });
 
-  app.get('/api/source-adapters', async () => ({ adapters: sourceCapabilities }));
+  app.get('/api/source-adapters', async () => ({
+    adapters: sourceCapabilitiesWithRuntime(),
+  }));
 
   app.post('/api/source-adapters/:adapterKey/live-probe', async (request, reply) => {
     const { adapterKey } = request.params as { adapterKey: string };
@@ -402,6 +519,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       });
     }
 
+    if (!catalogScopeExists(database, parsed.data)) {
+      return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
+    }
     if (!hasOfficialRuleUrls(database, parsed.data)) {
       return reply.code(400).send({ error: 'UNOFFICIAL_URL' });
     }
@@ -420,13 +540,28 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const { id } = request.params as { id: string };
     const current = getReleaseRule(database, id);
     if (!current) return reply.code(404).send({ error: 'RELEASE_RULE_NOT_FOUND' });
+    const merged = { ...current, ...parsed.data };
+    if (!catalogScopeExists(database, merged)) {
+      return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
+    }
     const urlBoundaryChanged = ['hospitalId', 'officialEntryUrl', 'sourceUrl'].some((key) =>
       Object.prototype.hasOwnProperty.call(parsed.data, key),
     );
-    if (urlBoundaryChanged && !hasOfficialRuleUrls(database, { ...current, ...parsed.data })) {
+    if (urlBoundaryChanged && !hasOfficialRuleUrls(database, merged)) {
       return reply.code(400).send({ error: 'UNOFFICIAL_URL' });
     }
-    return updateReleaseRule(database, id, parsed.data)!;
+    const rescheduleNeeded = RULE_RESCHEDULE_FIELDS.some(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(parsed.data, key) &&
+        parsed.data[key] !== current[key],
+    );
+    const updated = updateReleaseRule(database, id, parsed.data)!;
+    if (rescheduleNeeded) {
+      // 取消旧时刻的 pending 提醒（含已有批次的终态落地）并按更新后的规则立即重排
+      // （disable→enable 无需重启恢复）；非时刻字段更新不动调度。
+      rescheduleReleaseRemindersForRule(database, jobRunner, sourceAdapters, updated, now());
+    }
+    return updated;
   });
 
   app.delete('/api/release-rules/:id', async (request, reply) => {
@@ -434,6 +569,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!deleteReleaseRule(database, id)) {
       return reply.code(404).send({ error: 'RELEASE_RULE_NOT_FOUND' });
     }
+    cancelPendingReleaseReminderJobs(database, id, 'RULE_DELETED', now());
     return reply.code(204).send();
   });
 
@@ -441,6 +577,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const parsed = watchTaskInputSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'VALIDATION_ERROR', issues: parsed.error.issues });
+    }
+    if (!catalogScopeExists(database, parsed.data)) {
+      return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
+    }
+    if (enforceWatchTaskPolicy && !watchTaskPolicyAllows(parsed.data)) {
+      return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
+    }
+    if (enforceTaskDateWindow) {
+      const issues = validateWatchTaskDateWindow(parsed.data, now());
+      if (issues.length > 0) {
+        return reply.code(400).send({ error: 'VALIDATION_ERROR', issues });
+      }
     }
     const task = createWatchTask(database, parsed.data);
     scheduleWatchTask(database, jobRunner, task, sourceAdapters, now());
@@ -463,6 +611,37 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     }
 
     const { id } = request.params as { id: string };
+    const current = getWatchTask(database, id);
+    if (!current) return reply.code(404).send({ error: 'WATCH_TASK_NOT_FOUND' });
+    const mergedScope = {
+      hospitalId: parsed.data.hospitalId ?? current.hospitalId,
+      campusId: parsed.data.campusId !== undefined ? parsed.data.campusId : current.campusId,
+      departmentId: parsed.data.departmentId ?? current.departmentId,
+    };
+    if (!catalogScopeExists(database, mergedScope)) {
+      return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
+    }
+    const mergedTask = { ...current, ...parsed.data };
+    if (enforceWatchTaskPolicy && !watchTaskPolicyAllows(mergedTask)) {
+      return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
+    }
+    if (
+      enforceTaskDateWindow &&
+      (parsed.data.dateFrom !== undefined ||
+        parsed.data.dateTo !== undefined ||
+        parsed.data.enabled === true)
+    ) {
+      const issues = validateWatchTaskDateWindow(
+        {
+          dateFrom: parsed.data.dateFrom ?? current.dateFrom,
+          dateTo: parsed.data.dateTo ?? current.dateTo,
+        },
+        now(),
+      );
+      if (issues.length > 0) {
+        return reply.code(400).send({ error: 'VALIDATION_ERROR', issues });
+      }
+    }
     const result = updateWatchTask(database, id, parsed.data);
     if (result.status === 'not_found') {
       return reply.code(404).send({ error: 'WATCH_TASK_NOT_FOUND' });

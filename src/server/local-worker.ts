@@ -8,7 +8,7 @@ import {
 import { runSourceAdapter, type SourceAdapter } from '../core/source-adapter.js';
 import type { SqliteDatabase } from '../storage/database.js';
 import { SqliteJobRunner, type PersistentJob } from '../storage/job-runner.js';
-import { applyCheckResult } from '../storage/monitoring.js';
+import { applyCheckResult, deleteMonitoringBaseline } from '../storage/monitoring.js';
 import {
   cancelInvalidNotificationBatches,
   ensureReleaseReminderBatch,
@@ -22,8 +22,13 @@ import {
   recordDeliveryRetry,
 } from '../storage/notification-outbox.js';
 import { getReleaseRule } from '../storage/release-rules.js';
-import { createSourceScopeKey, scheduleWatchTask } from '../storage/scheduling.js';
 import {
+  createSourceScopeKey,
+  releaseRuleMatchesOccurrence,
+  scheduleWatchTask,
+} from '../storage/scheduling.js';
+import {
+  getSourceRuntime,
   recordSourceAttempt,
   recordSourceFailure,
   recordSourceResult,
@@ -38,6 +43,8 @@ export type WorkerHealth = {
   lastHeartbeatAt: string;
   lastErrorCode: string | null;
   heartbeatGapMs: number | null;
+  // 最近一次因监测空窗而删除基线并静默重建的时间（北京时间轮询读模型，供 UI 展示空窗）。
+  lastRebaselineAt: string | null;
 };
 
 type SourceCheckJobPayload = {
@@ -61,6 +68,7 @@ export class LocalWorker {
   private lastHeartbeat = 0;
   private lastErrorCode: string | null = null;
   private heartbeatGapMs: number | null = null;
+  private lastRebaselineAt: number | null = null;
 
   constructor(
     private readonly database: SqliteDatabase,
@@ -95,16 +103,26 @@ export class LocalWorker {
   }
 
   health(): WorkerHealth {
+    // heartbeat gap 必须在读取时现场计算：tick 卡死（如 adapter 不返回）时
+    // lastHeartbeat 不再推进，只有读时比对才能让 health 如实报 degraded。
+    const heartbeatTimeoutMs = Math.max(30_000, this.pollMs * 3);
+    const liveGapMs =
+      this.running && this.lastHeartbeat > 0
+        ? Math.max(0, this.now() - this.lastHeartbeat)
+        : null;
+    const stale = liveGapMs !== null && liveGapMs > heartbeatTimeoutMs;
     return {
       status: this.running
-        ? this.lastErrorCode
+        ? this.lastErrorCode || stale
           ? 'degraded'
           : 'healthy'
         : 'stopped',
       running: this.running,
       lastHeartbeatAt: new Date(this.lastHeartbeat).toISOString(),
       lastErrorCode: this.lastErrorCode,
-      heartbeatGapMs: this.heartbeatGapMs,
+      heartbeatGapMs: stale ? liveGapMs : this.heartbeatGapMs,
+      lastRebaselineAt:
+        this.lastRebaselineAt === null ? null : new Date(this.lastRebaselineAt).toISOString(),
     };
   }
 
@@ -235,6 +253,19 @@ export class LocalWorker {
       return;
     }
 
+    // 长时间离线后先建新基线（README 承诺）：必须在记录本次 attempt 之前读取
+    // source_runtime，否则 lastAttemptAt 会被本次 attempt 刷新。距上次 attempt
+    // 超过 2× 有效最小轮询间隔即判定为监测空窗：删除该 scope 的基线行（保留
+    // schedule/availability 审计状态），本轮只静默重建基线、不产生事件。
+    // 正常轮询的 attempt 间距 ≈ 1× 间隔，不会误判。
+    const lastAttemptAt =
+      getSourceRuntime(this.database, adapter.manifest.adapterKey)?.lastAttemptAt ?? null;
+    const rebaseline = lastAttemptAt !== null && now - lastAttemptAt > minIntervalMs * 2;
+    if (rebaseline) {
+      deleteMonitoringBaseline(this.database, payload.sourceId, payload.scopeKey);
+      this.lastRebaselineAt = now;
+    }
+
     recordSourceAttempt(
       this.database,
       adapter.manifest.adapterKey,
@@ -269,6 +300,7 @@ export class LocalWorker {
         scopeKey: payload.scopeKey,
         requestId: request.requestId,
         result,
+        rebaseline,
       });
       this.runner.complete(job.id, this.now());
 
@@ -317,6 +349,7 @@ export class LocalWorker {
       taskVersion?: number;
       ruleId?: string;
       occurrenceAt?: number;
+      reminderAt?: number;
       targetDate?: string;
       officialEntryUrl?: string;
       needsReconfirmation?: boolean;
@@ -336,18 +369,54 @@ export class LocalWorker {
       this.runner.complete(job.id, now);
       return;
     }
-    if (now - job.runAt > 300_000) {
+    // 错过判定必须使用不可变的计划提醒时刻：job.runAt 会被重试退避和
+    // LEASE_EXPIRED 恢复改写，不能作为基准。旧 payload 缺少 reminderAt 时
+    // 用 occurrenceAt 与任务当时的 remindBeforeMinutes（version 已校验）推导。
+    const scheduledReminderAt =
+      typeof payload.reminderAt === 'number'
+        ? payload.reminderAt
+        : payload.occurrenceAt - (task.remindBeforeMinutes ?? 0) * 60_000;
+    // 规则一致性校验：payload 快照与当前 rule 计算出的 occurrence/官方入口不一致时，
+    // 该 job 基于的是旧规则——0 发送、已有批次转终态、按当前规则重排。
+    if (
+      !releaseRuleMatchesOccurrence(rule, task, {
+        occurrenceAt: payload.occurrenceAt,
+        targetDate: payload.targetDate,
+        officialEntryUrl: payload.officialEntryUrl,
+      })
+    ) {
       ensureReleaseReminderBatch(
         this.database,
         {
           taskId: task.id,
           taskVersion: task.version,
           ruleId: rule.id,
-          reminderAt: job.runAt,
+          reminderAt: scheduledReminderAt,
           occurrenceAt: payload.occurrenceAt,
           targetDate: payload.targetDate,
           officialEntryUrl: payload.officialEntryUrl,
-          needsReconfirmation: payload.needsReconfirmation ?? false,
+          needsReconfirmation: rule.needsReconfirmation,
+          channelKeys: [...this.channels.keys()],
+          terminalReason: 'RULE_CHANGED',
+        },
+        now,
+      );
+      this.runner.complete(job.id, now);
+      scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now + 1);
+      return;
+    }
+    if (now - scheduledReminderAt > 300_000) {
+      ensureReleaseReminderBatch(
+        this.database,
+        {
+          taskId: task.id,
+          taskVersion: task.version,
+          ruleId: rule.id,
+          reminderAt: scheduledReminderAt,
+          occurrenceAt: payload.occurrenceAt,
+          targetDate: payload.targetDate,
+          officialEntryUrl: payload.officialEntryUrl,
+          needsReconfirmation: rule.needsReconfirmation,
           channelKeys: [...this.channels.keys()],
           terminalReason: 'RELEASE_REMINDER_MISSED',
         },
@@ -371,11 +440,11 @@ export class LocalWorker {
           taskId: task.id,
           taskVersion: task.version,
           ruleId: rule.id,
-          reminderAt: job.runAt,
+          reminderAt: scheduledReminderAt,
           occurrenceAt: payload.occurrenceAt,
           targetDate: payload.targetDate,
           officialEntryUrl: payload.officialEntryUrl,
-          needsReconfirmation: payload.needsReconfirmation ?? false,
+          needsReconfirmation: rule.needsReconfirmation,
           channelKeys,
           terminalReason: 'NOTIFICATION_CHANNEL_NOT_FOUND',
         },
@@ -392,16 +461,35 @@ export class LocalWorker {
         taskId: task.id,
         taskVersion: task.version,
         ruleId: rule.id,
-        reminderAt: job.runAt,
+        reminderAt: scheduledReminderAt,
         occurrenceAt: payload.occurrenceAt,
         targetDate: payload.targetDate,
         officialEntryUrl: payload.officialEntryUrl,
-        needsReconfirmation: payload.needsReconfirmation ?? false,
+        needsReconfirmation: rule.needsReconfirmation,
         channelKeys,
       },
       now,
     );
-    const warning = payload.needsReconfirmation
+    const scope = this.database
+      .prepare(
+        `SELECT h.name AS hospital_name, c.name AS campus_name, d.name AS department_name
+         FROM watch_task wt
+         JOIN hospital h ON h.id = wt.hospital_id
+         LEFT JOIN campus c ON c.id = wt.campus_id
+         JOIN department d ON d.id = wt.department_id
+         WHERE wt.id = ?`,
+      )
+      .get(task.id) as
+      | { hospital_name: string; campus_name: string | null; department_name: string }
+      | undefined;
+    const scopeText =
+      [scope?.hospital_name, scope?.campus_name, scope?.department_name]
+        .filter((part): part is string => Boolean(part))
+        .join(' · ') || '关注任务';
+    const verifiedDate = rule.verifiedAt.slice(0, 10);
+    // 正文渲染一律读取当前 rule（needsReconfirmation / 官方入口 / 放号时间 / 核验日期），
+    // 避免 payload 快照在规则非时刻字段更新后产生陈旧内容。
+    const warning = rule.needsReconfirmation
       ? '该规则需要重新核验，请以医院官方渠道为准。'
       : '请以医院官方渠道为准。';
     let retryableError: string | undefined;
@@ -437,10 +525,10 @@ export class LocalWorker {
       }
 
       const message: NotificationMessage = {
-        messageId: `${delivery.id}@easy-hospital.local`,
+        messageId: delivery.messageId,
         subject: '放号前规则提醒',
-        text: `北京同仁医院 · 崇文门院区 · 鼻科\n预计 ${rule.releaseTimeLocal} 放号，目标就诊日期 ${payload.targetDate}。${warning}`,
-        officialEntryUrl: payload.officialEntryUrl,
+        text: `${scopeText}\n预计 ${rule.releaseTimeLocal} 放号，目标就诊日期 ${payload.targetDate}。${warning}\n规则最后核验日期：${verifiedDate}；本提醒不代替人工预约，请前往官方入口自行完成预约。`,
+        officialEntryUrl: rule.officialEntryUrl,
         eventTags: ['schedule_released'],
         detectedAt: new Date(now).toISOString(),
       };

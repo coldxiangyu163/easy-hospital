@@ -45,8 +45,17 @@ describe('GET /api/runtime-status', () => {
       ]),
       browserAgent: { configured: true, lastSeenAt: null },
       sourceCapabilities: expect.arrayContaining([
-        expect.objectContaining({ key: 'pumch-public-dermatology-schedule', accessClass: 'A' }),
-        expect.objectContaining({ key: 'browser-agent', accessClass: 'B' }),
+        expect.objectContaining({
+          key: 'pumch-public-dermatology-schedule',
+          accessClass: 'A',
+          runtime: null,
+        }),
+        expect.objectContaining({
+          key: 'browser-agent',
+          accessClass: 'B',
+          capabilities: expect.objectContaining({ schedule: false }),
+          runtime: null,
+        }),
         expect.objectContaining({ key: 'tongren-rhinology-rules', accessClass: 'C' }),
       ]),
     });
@@ -79,6 +88,7 @@ describe('GET /api/runtime-status', () => {
             cancellation: false,
             ruleReminder: false,
           },
+          runtime: null,
         }),
         expect.objectContaining({ key: 'browser-agent', accessClass: 'B' }),
         expect.objectContaining({ key: 'tongren-rhinology-rules', accessClass: 'C' }),

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 
 import { api, type Catalog, type WatchTask } from '../api.js';
@@ -9,6 +10,15 @@ type TasksState =
   | { status: 'loading' }
   | { status: 'loaded'; tasks: WatchTask[]; catalog: Catalog }
   | { status: 'error' };
+
+// 删除对话框打开期间让页面其余部分对辅助技术和指针交互不可达。
+// 对话框通过 portal 渲染到 body，不会被 #app-shell 的 inert 影响。
+function setBackgroundInert(inert: boolean) {
+  const shell = document.getElementById('app-shell');
+  if (!shell) return;
+  if (inert) shell.setAttribute('inert', '');
+  else shell.removeAttribute('inert');
+}
 
 export function TasksPage() {
   const [attempt, setAttempt] = useState(0);
@@ -45,9 +55,13 @@ export function TasksPage() {
 
   function closeDeleteDialog() {
     if (deleteTask && busyTaskId === deleteTask.id) return;
+    setBackgroundInert(false);
     setDeleteTask(null);
     restoreDeleteFocus();
   }
+
+  // 组件卸载（如对话框打开期间离开页面）时必须归还背景交互能力
+  useEffect(() => () => setBackgroundInert(false), []);
 
   useEffect(() => {
     if (!deleteTask || busyTaskId === deleteTask.id) return;
@@ -56,6 +70,7 @@ export function TasksPage() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        setBackgroundInert(false);
         setDeleteTask(null);
         restoreDeleteFocus();
         return;
@@ -111,10 +126,12 @@ export function TasksPage() {
     try {
       await api.deleteTask(target.id);
       setState({ ...state, tasks: state.tasks.filter((item) => item.id !== target.id) });
+      setBackgroundInert(false);
       setDeleteTask(null);
       restoreDeleteFocus();
     } catch {
       setMutationError('任务没有删除。请确认本机服务后重试。');
+      setBackgroundInert(false);
       setDeleteTask(null);
       restoreDeleteFocus();
     } finally {
@@ -182,7 +199,7 @@ export function TasksPage() {
                 <p>{task.dateFrom} 至 {task.dateTo} · {policy.title}</p>
               </div>
               <span className={task.enabled ? styles.statusGood : styles.statusMuted}>
-                {task.enabled ? '监控中' : '已暂停'}
+                {task.enabled ? (policy.level === 'C' ? '规则提醒已启用' : '监控中') : '已暂停'}
               </span>
               <div className={styles.rowActions}>
                 <Link className={styles.textButton} to={`/tasks/${encodeURIComponent(task.id)}/edit`}>编辑</Link>
@@ -202,6 +219,7 @@ export function TasksPage() {
                   aria-label={`删除关注 ${label}`}
                   onClick={(event) => {
                     deleteTriggerRef.current = event.currentTarget;
+                    setBackgroundInert(true);
                     setDeleteTask(task);
                   }}
                 >
@@ -213,34 +231,37 @@ export function TasksPage() {
         })}
       </section>
 
-      {deleteTask ? (
-        <div className={styles.dialogBackdrop}>
-          <section
-            ref={deleteDialogRef}
-            className={styles.dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-dialog-title"
-            aria-describedby="delete-dialog-description"
-            aria-busy={busyTaskId === deleteTask.id}
-          >
-            <p className={styles.eyebrow}>删除关注</p>
-            <h2 id="delete-dialog-title">删除这项关注？</h2>
-            <p className={styles.dialogTarget}>
-              {targetLabel(state.catalog, deleteTask.hospitalId, deleteTask.campusId, deleteTask.departmentId)}
-              <br />
-              {deleteTask.dateFrom} 至 {deleteTask.dateTo}
-            </p>
-            <p id="delete-dialog-description">任务配置会从列表移除。这个操作不会影响医院账户，也不会取消任何官方预约。</p>
-            <div className={styles.actions}>
-              <button ref={keepTaskButtonRef} className={styles.secondaryButton} type="button" disabled={busyTaskId === deleteTask.id} onClick={closeDeleteDialog}>保留任务</button>
-              <button className={styles.dangerButton} type="button" disabled={busyTaskId === deleteTask.id} onClick={() => void confirmDelete()}>
-                {busyTaskId === deleteTask.id ? '正在删除…' : '确认删除'}
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      {deleteTask
+        ? createPortal(
+            <div className={styles.dialogBackdrop}>
+              <section
+                ref={deleteDialogRef}
+                className={styles.dialog}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="delete-dialog-title"
+                aria-describedby="delete-dialog-description"
+                aria-busy={busyTaskId === deleteTask.id}
+              >
+                <p className={styles.eyebrow}>删除关注</p>
+                <h2 id="delete-dialog-title">删除这项关注？</h2>
+                <p className={styles.dialogTarget}>
+                  {targetLabel(state.catalog, deleteTask.hospitalId, deleteTask.campusId, deleteTask.departmentId)}
+                  <br />
+                  {deleteTask.dateFrom} 至 {deleteTask.dateTo}
+                </p>
+                <p id="delete-dialog-description">任务配置会从列表移除。这个操作不会影响医院账户，也不会取消任何官方预约。</p>
+                <div className={styles.actions}>
+                  <button ref={keepTaskButtonRef} className={styles.secondaryButton} type="button" disabled={busyTaskId === deleteTask.id} onClick={closeDeleteDialog}>保留任务</button>
+                  <button className={styles.dangerButton} type="button" disabled={busyTaskId === deleteTask.id} onClick={() => void confirmDelete()}>
+                    {busyTaskId === deleteTask.id ? '正在删除…' : '确认删除'}
+                  </button>
+                </div>
+              </section>
+            </div>,
+            document.body,
+          )
+        : null}
     </>
   );
 }

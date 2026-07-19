@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  chmodSync,
   closeSync,
   constants,
   copyFileSync,
@@ -42,6 +43,7 @@ const declaredMigrationChecksums = {
   14: 'c50f6edb771ad46db76e7a1cd4d131adc5abbe8baf6c8f93797102b09a829535',
   15: '253d9150aa1eb4a48a64f98e60f67a034797666c232235bd085b71c44d3ba855',
   16: '273e015a473cb5f11c1d82e6029f02997b89615f488cd6be89e0d53319118974',
+  17: '81ae9076e3d0813d6bdb183fb22387c776c51ec39154de695e616cb095679d2e',
 } as const;
 
 function migrationChecksum(migration: MigrationDefinition): string {
@@ -428,12 +430,37 @@ ${migration16ChecksumCases}
       DROP TABLE schema_migration_legacy;
     `;
 
+// migration 17 把“医院官方域/证据域”收敛为数据库单一事实源：
+// officialEntryUrl 只允许 official 域，sourceUrl 允许 official + evidence 域。
+const migration17Sql = `
+      CREATE TABLE hospital_domain (
+        hospital_id TEXT NOT NULL REFERENCES hospital(id),
+        domain TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('official', 'evidence')),
+        PRIMARY KEY (hospital_id, domain, kind)
+      ) STRICT;
+
+      INSERT INTO hospital_domain (hospital_id, domain, kind) VALUES
+        ('hospital-pumch', 'pumch.cn', 'official'),
+        ('hospital-pumch', 'pumch.cn', 'evidence'),
+        ('hospital-tongren', 'trhos.com', 'official'),
+        ('hospital-tongren', 'trhos.com', 'evidence'),
+        ('hospital-tongren', 'bjtrhos.cn', 'official'),
+        ('hospital-tongren', 'bjtrhos.cn', 'evidence'),
+        ('hospital-tongren', 'news.bjd.com.cn', 'evidence');
+    `;
+
 const migrations = [
   ...legacyMigrations,
   {
     version: 16,
     name: 'migration-manifest-checksums',
     sql: migration16Sql,
+  },
+  {
+    version: 17,
+    name: 'hospital-domain-policy',
+    sql: migration17Sql,
   },
 ] as const satisfies readonly MigrationDefinition[];
 
@@ -578,6 +605,16 @@ function readAndValidateAppliedMigrations(database: SqliteDatabase): AppliedMigr
   }
 }
 
+// 跨平台容错：Windows 或部分文件系统不支持 POSIX 权限位时 chmod 可能失败，
+// 保持可用优先，静默跳过（调用方均为本机私有路径）。
+function restrictPermissions(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // 忽略不支持权限位的平台
+  }
+}
+
 function configureDatabase(database: SqliteDatabase): void {
   database.pragma('foreign_keys = ON');
   database.pragma('journal_mode = WAL');
@@ -695,11 +732,13 @@ function createMigrationBackup(
 ): DatabaseBackupInfo {
   const directory = backupDirectory(databasePath);
   mkdirSync(directory, { recursive: true });
+  restrictPermissions(directory, 0o700);
   const targetVersion = migrations.at(-1)?.version ?? fromVersion;
   const filename = `${backupPrefix(databasePath)}v${fromVersion}-to-v${targetVersion}.${timestampForFilename()}.sqlite3`;
   const path = uniquePath(join(directory, filename));
 
   database.prepare('VACUUM INTO ?').run(path);
+  restrictPermissions(path, 0o600);
   verifyDatabaseBackup(path);
   const backups = listDatabaseBackups(databasePath);
   for (const expired of backups.slice(5)) unlinkSync(expired.path);
@@ -714,7 +753,10 @@ function createMigrationBackup(
 export function openDatabase(path = ':memory:'): SqliteDatabase {
   const inMemory = path === ':memory:';
   const existed = !inMemory && existsSync(path);
-  if (!inMemory) mkdirSync(dirname(path), { recursive: true });
+  if (!inMemory) {
+    mkdirSync(dirname(path), { recursive: true });
+    restrictPermissions(dirname(path), 0o700);
+  }
 
   let database: SqliteDatabase;
   try {
@@ -745,6 +787,12 @@ export function openDatabase(path = ':memory:'): SqliteDatabase {
       assertIntegrity(database);
     } catch (error) {
       throw new DatabaseIntegrityError('数据库迁移后完整性检查失败', error);
+    }
+    if (!inMemory) {
+      restrictPermissions(path, 0o600);
+      for (const suffix of ['-wal', '-shm']) {
+        if (existsSync(`${path}${suffix}`)) restrictPermissions(`${path}${suffix}`, 0o600);
+      }
     }
     return database;
   } catch (error) {
@@ -792,6 +840,7 @@ export function restoreDatabaseBackup(
   const directory = dirname(databasePath);
   const rollbackDirectory = join(directory, 'corrupt');
   mkdirSync(rollbackDirectory, { recursive: true });
+  restrictPermissions(rollbackDirectory, 0o700);
   const rollbackPath = uniquePath(
     join(
       rollbackDirectory,
@@ -802,17 +851,21 @@ export function restoreDatabaseBackup(
 
   try {
     copyFileSync(databasePath, rollbackPath, constants.COPYFILE_EXCL);
+    restrictPermissions(rollbackPath, 0o600);
     for (const suffix of ['-wal', '-shm']) {
       const sidecar = `${databasePath}${suffix}`;
       if (existsSync(sidecar)) {
         copyFileSync(sidecar, `${rollbackPath}${suffix}`, constants.COPYFILE_EXCL);
+        restrictPermissions(`${rollbackPath}${suffix}`, 0o600);
       }
     }
 
     copyFileSync(verified.path, temporaryPath, constants.COPYFILE_EXCL);
+    restrictPermissions(temporaryPath, 0o600);
     fsyncFile(temporaryPath);
     verifyDatabaseBackup(temporaryPath);
     renameSync(temporaryPath, databasePath);
+    restrictPermissions(databasePath, 0o600);
     rmSync(`${databasePath}-wal`, { force: true });
     rmSync(`${databasePath}-shm`, { force: true });
     fsyncDirectory(directory);

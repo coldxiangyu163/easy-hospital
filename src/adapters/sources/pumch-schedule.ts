@@ -64,6 +64,13 @@ const parseDoctorNames = (cellHtml: string): string[] => {
     doctors.push(doctorName);
   }
 
+  // fail-closed：剥离链接后仍存在非空、非动作/说明文字（例如纯文本医生名）时，
+  // 说明单元格结构已变化，绝不能静默当成空排班。
+  const residualText = decodeText(cellHtml.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, ''));
+  if (residualText && !ACTION_TEXT_PATTERN.test(residualText)) {
+    throw new PumchScheduleParseError('排班单元格出现未识别文字');
+  }
+
   return [...new Set(doctors)];
 };
 

@@ -40,6 +40,28 @@ export const watchTaskInputSchema = z
 
 export type WatchTaskInput = z.infer<typeof watchTaskInputSchema>;
 
+function addUtcDays(dateKey: string, days: number): string {
+  const date = new Date(`${dateKey}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function validateWatchTaskDateWindow(
+  input: Pick<WatchTaskInput, 'dateFrom' | 'dateTo'>,
+  now: number,
+): Array<{ path: ['dateFrom'] | ['dateTo']; message: string }> {
+  const today = new Date(now + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10);
+  const latest = addUtcDays(today, 14);
+  const issues: Array<{ path: ['dateFrom'] | ['dateTo']; message: string }> = [];
+  if (input.dateFrom < today) {
+    issues.push({ path: ['dateFrom'], message: '开始日期不能早于北京时间今天' });
+  }
+  if (input.dateTo > latest) {
+    issues.push({ path: ['dateTo'], message: '结束日期不能晚于北京时间今天加 14 天' });
+  }
+  return issues;
+}
+
 export const watchTaskPatchSchema = z.object({
   version: z.number().int().positive(),
   enabled: z.boolean().optional(),

@@ -7,6 +7,7 @@ import { runSourceAdapter, type CheckRequest } from '../../src/core/source-adapt
 import {
   createPumchDermatologyScheduleAdapter,
   PUMCH_MAX_RESPONSE_BYTES,
+  PUMCH_SCHEDULE_URL,
 } from '../../src/adapters/sources/pumch.js';
 
 const fixtureUrl = new URL('../fixtures/pumch/skin-schedule.fragment.html', import.meta.url);
@@ -291,6 +292,167 @@ describe('PumchDermatologyScheduleAdapter contract', () => {
       observations: [],
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows an allowlisted redirect exactly once and parses the final response', async () => {
+    const html = await readFile(fileURLToPath(fixtureUrl), 'utf8');
+    const redirectTarget = 'https://www.pumch.cn/expert_chuzhen_week/%E7%9A%AE%E8%82%A4%E7%A7%91/3/1.html';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === redirectTarget) return new Response(html, { status: 200 });
+      return new Response(null, { status: 301, headers: { location: redirectTarget } });
+    });
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result.status).toBe('OK');
+    expect(result.observations).toHaveLength(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(String(vi.mocked(fetchImpl).mock.calls[1]![0])).toBe(redirectTarget);
+  });
+
+  it('fails a second redirect even when it stays inside the allowlist', async () => {
+    const innerTarget = 'https://www.pumch.cn/expert_chuzhen_week/next';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === innerTarget) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://www.pumch.cn/expert_chuzhen_week/final' },
+        });
+      }
+      return new Response(null, { status: 301, headers: { location: innerTarget } });
+    });
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result).toMatchObject({
+      status: 'TEMPORARY_FAILURE',
+      errorCode: 'PUMCH_REDIRECT_RETRY_REQUIRED',
+      observations: [],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails a redirect loop back to the original URL', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: PUMCH_SCHEDULE_URL },
+      }),
+    );
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result).toMatchObject({
+      status: 'TEMPORARY_FAILURE',
+      errorCode: 'PUMCH_REDIRECT_RETRY_REQUIRED',
+      observations: [],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies the 2 MiB response cap to the followed redirect response', async () => {
+    const redirectTarget = 'https://www.pumch.cn/expert_chuzhen_week/big';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === redirectTarget) {
+        return new Response('x'.repeat(PUMCH_MAX_RESPONSE_BYTES + 1), { status: 200 });
+      }
+      return new Response(null, { status: 301, headers: { location: redirectTarget } });
+    });
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result).toMatchObject({
+      status: 'SOURCE_CHANGED',
+      errorCode: 'PUMCH_RESPONSE_TOO_LARGE',
+      observations: [],
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('classifies the followed redirect response status like a direct response', async () => {
+    const redirectTarget = 'https://www.pumch.cn/expert_chuzhen_week/denied';
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === redirectTarget) return new Response('denied', { status: 418 });
+      return new Response(null, { status: 302, headers: { location: redirectTarget } });
+    });
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result).toMatchObject({
+      status: 'RATE_LIMITED',
+      errorCode: 'PUMCH_WAF_OR_ACCESS_DENIED',
+      observations: [],
+    });
+  });
+
+  it('returns RATE_LIMITED for an HTTP 418 WAF response', async () => {
+    const fetchImpl = vi.fn(async () => new Response('teapot', { status: 418 }));
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result).toMatchObject({
+      status: 'RATE_LIMITED',
+      errorCode: 'PUMCH_WAF_OR_ACCESS_DENIED',
+      observations: [],
+    });
+  });
+
+  it('returns SOURCE_CHANGED when doctor names lose their links and become plain text', async () => {
+    const plainTextDoctors = `
+      <div id="docker-visit"><div class="visitinfo">
+        <table>
+          <tr><th class="th3">2026.07.20</th><th class="th3">2026.07.21</th></tr>
+          <tr><td>上午</td><td class="tdh3"><span>医生甲</span></td><td class="tdh4"></td></tr>
+          <tr><td>下午</td><td class="tdh3"></td><td class="tdh4"></td></tr>
+        </table>
+      </div></div>
+    `;
+    const fetchImpl = vi.fn(async () => new Response(plainTextDoctors, { status: 200 }));
+    const renderPage = vi.fn(async () => {
+      throw new Error('unrecognized structure must not trigger rendering');
+    });
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl,
+      renderPage,
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+
+    const result = await runSourceAdapter(adapter, request);
+
+    expect(result).toMatchObject({
+      status: 'SOURCE_CHANGED',
+      errorCode: 'PUMCH_STRUCTURE_CHANGED',
+      observations: [],
+    });
+    expect(renderPage).not.toHaveBeenCalled();
   });
 
   it('keeps a rendered login wall unknown instead of treating it as an empty schedule', async () => {

@@ -266,7 +266,9 @@
           doctorName,
           title,
           availability,
-          scheduleStatus: availability === 'unknown' ? 'unknown' : 'present',
+          // Browser Agent 只读取可见号源状态，从不直接观察排班发布；
+          // 排班与号源是不同事实，scheduleStatus 恒为 unknown，不得互相推导。
+          scheduleStatus: 'unknown',
           officialEntryUrl: `${source.origin}/`,
           evidence: 'explicit',
         },
