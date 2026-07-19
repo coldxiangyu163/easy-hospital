@@ -1,0 +1,162 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import type { FastifyInstance } from 'fastify';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import type { SourceAdapter } from '../../src/core/source-adapter.js';
+import { buildApp } from '../../src/server/app.js';
+
+describe('SourceAdapter live probe', () => {
+  let app: FastifyInstance | undefined;
+  let directory: string | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    if (directory) await rm(directory, { recursive: true, force: true });
+  });
+
+  it('执行真实契约路径并持久遵守 Adapter minIntervalMs', async () => {
+    let calls = 0;
+    const adapter: SourceAdapter = {
+      manifest: {
+        adapterKey: 'fixture-live',
+        contractVersion: 1,
+        version: '1.0.0',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['hospital.example'],
+        minIntervalMs: 300_000,
+      },
+      async check() {
+        calls += 1;
+        const observedAt = new Date().toISOString();
+        return {
+          status: 'OK',
+          observedAt,
+          nextAllowedAt: new Date(Date.now() + 300_000).toISOString(),
+          contentHash: createHash('sha256').update(String(calls)).digest('hex'),
+          observations: [],
+        };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-live-probe-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const options = {
+      databasePath,
+      sourceAdapters: [adapter],
+      enforceSourceRateLimit: true,
+    };
+    app = await buildApp(options);
+    const headers = { host: '127.0.0.1' };
+    const payload = {
+      requestId: 'live-probe-1',
+      sourceId: 'fixture-live-source',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      dateFrom: '2026-07-20',
+      dateTo: '2026-07-26',
+      doctorName: null,
+      titles: [],
+      session: 'ANY',
+      deadlineAt: new Date(Date.now() + 30_000).toISOString(),
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/source-adapters/fixture-live/live-probe',
+      headers,
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ status: 'OK', eventsCreated: 0 });
+    expect(calls).toBe(1);
+
+    const legacyEndpointIsAlsoLimited = await app.inject({
+      method: 'POST',
+      url: '/api/source-checks/fixture-live',
+      headers,
+      payload: { ...payload, requestId: 'live-probe-legacy' },
+    });
+    expect(legacyEndpointIsAlsoLimited.statusCode).toBe(429);
+    expect(calls).toBe(1);
+
+    const limited = await app.inject({
+      method: 'POST',
+      url: '/api/source-adapters/fixture-live/live-probe',
+      headers,
+      payload: { ...payload, requestId: 'live-probe-2' },
+    });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({
+      error: 'SOURCE_RATE_LIMITED',
+      retryAfterMs: expect.any(Number),
+    });
+    expect(calls).toBe(1);
+
+    await app.close();
+    app = await buildApp(options);
+    const afterRestart = await app.inject({
+      method: 'POST',
+      url: '/api/source-adapters/fixture-live/live-probe',
+      headers,
+      payload: { ...payload, requestId: 'live-probe-3' },
+    });
+    expect(afterRestart.statusCode).toBe(429);
+    expect(calls).toBe(1);
+  });
+
+  it('协和默认 live probe 无需前端拼接技术 CheckRequest', async () => {
+    const now = Date.parse('2026-07-19T00:00:00.000Z');
+    let receivedRequest: unknown;
+    const adapter: SourceAdapter = {
+      manifest: {
+        adapterKey: 'pumch-public-dermatology-schedule',
+        contractVersion: 1,
+        version: '1.0.0-test',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
+        minIntervalMs: 7_200_000,
+      },
+      async check(request) {
+        receivedRequest = request;
+        return {
+          status: 'OK',
+          observedAt: new Date(now).toISOString(),
+          nextAllowedAt: new Date(now + 7_200_000).toISOString(),
+          contentHash: 'c'.repeat(64),
+          observations: [],
+        };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-live-probe-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      sourceAdapters: [adapter],
+      enforceSourceRateLimit: true,
+      now: () => now,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/source-adapters/pumch-public-dermatology-schedule/live-probe',
+      headers: { host: '127.0.0.1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(receivedRequest).toMatchObject({
+      sourceId: 'source-pumch-public-schedule',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      dateFrom: '2026-07-19',
+      dateTo: '2026-07-26',
+      session: 'ANY',
+      deadlineAt: '2026-07-19T00:00:30.000Z',
+    });
+  });
+});

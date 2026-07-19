@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Browser Agent 设置</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="options-page">
+    <main class="options-shell">
+      <header class="hero">
+        <p class="eyebrow">北京挂号雷达 · 本机 Browser Agent</p>
+        <h1>连接与隐私设置</h1>
+        <p class="lead">这是默认关闭、尚待真实会话验证的实验性能力；本项目与医院及北京 114 不存在隶属、授权、合作或代理关系。</p>
+      </header>
+
+      <section class="options-card">
+        <h2>本机服务自检</h2>
+        <p>先检查 <code>127.0.0.1:3210</code> 是否可达，再使用 HMAC-SHA256 challenge 验证服务身份。challenge 只发送随机 nonce，不在 query、header 或 body 中发送 token。</p>
+        <button id="check-options-connection" type="button" class="secondary">检查本机连接</button>
+      </section>
+
+      <section class="options-card">
+        <h2>配对 token</h2>
+        <p id="saved-token-state">正在检查…</p>
+        <label>
+          新配对 token
+          <input id="pairing-token" type="password" autocomplete="off" spellcheck="false" placeholder="从本机 easy-hospital 获取">
+        </label>
+        <div class="inline-actions">
+          <button id="save-token" type="button" class="primary">保存到扩展本机存储</button>
+          <button id="clear-token" type="button" class="danger">删除 token</button>
+        </div>
+        <p class="fine-print">配对 token 仅保存在 <code>chrome.storage.local</code>。每次 observation 提交前先验证服务 proof；验证成功后，token 才作为 Bearer 发送到固定地址 <code>http://127.0.0.1:3210/api/browser-agent/observations</code>，绝不会发往医院域名。</p>
+      </section>
+
+      <section class="options-card privacy-list">
+        <h2>启用前请确认</h2>
+        <ul>
+          <li>扫描必须由你在 popup 中点击触发，每次只执行一次，不后台轮询。</li>
+          <li>服务可达不等于身份匹配；HMAC proof 失败时保持关闭且不会发送 observation。</li>
+          <li>仅支持协和、同仁及北京 114 的 allowlist 官方 HTTPS 域名。</li>
+          <li>实验性 selector allowlist 尚待真实会话验证；无法严格匹配医院、院区、科室和号源行时只输出 <code>unknown</code>。</li>
+          <li>登录墙、验证码、冲突状态或 selector 失效一律输出 <code>unknown</code>，不会猜测“无号”。</li>
+          <li>扩展代码不访问医院 Cookie、localStorage 或网络请求头；页面地址只保留 origin，只提交规范化结果，不提交原始文字或完整 DOM/HTML。</li>
+          <li>不自动点击号源，不预约、不提交、不付款，也不识别或绕过验证码。</li>
+        </ul>
+      </section>
+
+      <p id="options-message" class="message" data-tone="neutral" aria-live="polite">尚未执行操作。</p>
+    </main>
+
+    <script src="shared.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

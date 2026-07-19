@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>本机 Browser Agent</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="popup-page">
+    <main class="panel">
+      <header class="hero">
+        <p class="eyebrow">北京挂号雷达 · B 级实验性来源（默认关闭）</p>
+        <h1>读取当前官方页面</h1>
+        <p class="lead">此能力尚待真实会话验证。只有点击下方“读取可见状态”后才扫描一次；不会后台轮询，也不会替你预约。</p>
+      </header>
+
+      <section class="status-card" aria-label="连接状态">
+        <p id="page-state">正在确认当前页…</p>
+        <p id="token-state">配对 token：正在检查…</p>
+        <p>只有 HMAC-SHA256 身份证明通过后才显示配对就绪；每次提交前都会重新验证。</p>
+        <div class="inline-actions">
+          <button id="check-connection" type="button" class="secondary">连接自检</button>
+          <button id="open-options" type="button" class="link-button">扩展设置</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="confirm-title">
+        <div class="section-heading">
+          <span class="step">1</span>
+          <div>
+            <h2 id="confirm-title">人工确认目标</h2>
+            <p>这些字段不会从账号或浏览器存储读取。</p>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            医院
+            <select id="hospital-id" required>
+              <option value="hospital-pumch">北京协和医院</option>
+              <option value="hospital-tongren">北京同仁医院</option>
+            </select>
+          </label>
+          <label>
+            院区
+            <select id="campus-id" required>
+              <option value="campus-pumch-dongdan">东单院区</option>
+              <option value="campus-tongren-chongwenmen">崇文门院区</option>
+            </select>
+          </label>
+          <label class="wide">
+            科室
+            <select id="department-id" required>
+              <option value="department-pumch-dermatology">皮肤科</option>
+              <option value="department-tongren-rhinology">鼻科</option>
+            </select>
+          </label>
+          <label>
+            日期
+            <input id="date" type="date" required>
+          </label>
+          <label>
+            时段
+            <select id="session" required>
+              <option value="AM">上午 AM</option>
+              <option value="PM">下午 PM</option>
+            </select>
+          </label>
+          <label>
+            医生（可留空）
+            <input id="doctor-name" type="text" maxlength="40" placeholder="任意医生">
+          </label>
+          <label>
+            职称（可留空）
+            <input id="title" type="text" maxlength="40" placeholder="任意职称">
+          </label>
+        </div>
+
+        <label class="confirmation">
+          <input id="confirmed" type="checkbox">
+          <span>我已核对以上条件与当前官方页面一致；我理解扩展只读取可见状态，不会自动预约、点击号源、提交、付款或处理验证码。</span>
+        </label>
+      </section>
+
+      <section aria-labelledby="scan-title">
+        <div class="section-heading">
+          <span class="step">2</span>
+          <div>
+            <h2 id="scan-title">实验性单次读取并复核</h2>
+            <p>请先把目标号源行滚动到当前视口；无法严格匹配上下文时只返回 unknown。</p>
+          </div>
+        </div>
+        <button id="scan" type="button" class="primary">读取可见状态</button>
+        <div class="result-card" aria-live="polite">
+          <strong>脱敏结果</strong>
+          <p id="scan-result">尚未读取。修改确认条件后需重新读取。</p>
+        </div>
+        <button id="submit" type="button" class="primary" disabled>提交到 127.0.0.1 本机服务</button>
+      </section>
+
+      <p id="message" class="message" data-tone="neutral" aria-live="polite">尚未执行操作。</p>
+
+      <footer class="privacy-note">
+        <strong>隐私边界</strong>
+        <p>扩展代码不访问医院 Cookie、localStorage 或网络请求头；页面地址只归一化为 origin，不处理 path、query 或 hash。HMAC challenge 只发送随机 nonce，不发送 token；token 仅在身份验证成功后的 observation 请求中作为 Bearer 使用。扩展只把规范化结果写入本机回环地址，不提交原始文字或完整 DOM/HTML。最终号源和预约结果以官方页面为准。</p>
+      </footer>
+    </main>
+
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

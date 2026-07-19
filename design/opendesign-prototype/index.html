@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>北京挂号雷达｜产品评审原型</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #f4f7fa; --surface: #fff; --surface-2: #f8fafc; --fg: #142033; --muted: #657083;
+      --border: #dde4eb; --accent: #1769e0; --accent-contrast: #fff; --accent-soft: #eaf2fe;
+      --good: #168460; --warn: #a66516; --bad: #c33c46; --info: #376ea8;
+      --shadow: none; --radius-sm: 6px; --radius: 10px; --radius-lg: 14px;
+      --body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+      --mono: "SFMono-Regular", "Cascadia Code", Menlo, Consolas, monospace;
+      --ease: cubic-bezier(.23,1,.32,1);
+    }
+    body[data-dir="B"] {
+      --bg: #f7f6f1; --surface: #fff; --surface-2: #f3f4ef; --fg: #26302c; --muted: #6c746f;
+      --border: #e3e1d9; --accent: #2c7865; --accent-soft: #e6f1ed; --good: #2d7b62;
+      --warn: #956a2f; --bad: #b44b50; --info: #4b7582; --radius-sm: 10px; --radius: 16px;
+      --radius-lg: 24px; --shadow: 0 14px 40px rgba(43,55,48,.06);
+      --display: "STSong", "Songti SC", "Noto Serif CJK SC", serif;
+    }
+    body[data-dir="C"] {
+      color-scheme: dark; --bg: #071019; --surface: #0c1722; --surface-2: #0a131c; --fg: #dce8f2;
+      --muted: #71879a; --border: #203244; --accent: #39c6a3; --accent-contrast: #04100d;
+      --accent-soft: #12332e; --good: #42c997; --warn: #e2a94b; --bad: #ef6a73; --info: #6fa7db;
+      --radius-sm: 2px; --radius: 4px; --radius-lg: 6px; --shadow: none;
+      --body: "SFMono-Regular", "Cascadia Code", Menlo, "PingFang SC", monospace;
+      --display: "SFMono-Regular", "Cascadia Code", Menlo, "PingFang SC", monospace;
+    }
+    html { background: var(--bg); }
+    body { margin: 0; min-width: 320px; background: var(--bg); color: var(--fg); font: 14px/1.55 var(--body); transition: background .22s var(--ease), color .22s var(--ease); }
+    button, input, select { font: inherit; }
+    button, a, input, select { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
+    button { color: inherit; }
+    .skip { position: fixed; left: 12px; top: -60px; z-index: 99; padding: 10px 14px; background: var(--fg); color: var(--bg); border-radius: var(--radius-sm); }
+    .skip:focus { top: 12px; }
+    .topbar { height: 64px; padding: 0 clamp(16px,3vw,42px); display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 30; }
+    .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .brand-mark { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--fg); border-radius: 50%; font: 700 12px/1 var(--mono); letter-spacing: -.03em; }
+    .brand h1 { margin: 0; font: 700 15px/1.2 var(--display); letter-spacing: -.01em; }
+    .brand small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .top-meta { display: flex; align-items: center; gap: 10px; color: var(--muted); font: 11px/1.2 var(--mono); }
+    .top-settings { min-height: 36px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); cursor: pointer; font: 700 11px/1 var(--body); }
+    .top-settings:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+    .mobile-label { display: none; }
+    .demo-flag { padding: 5px 8px; color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--warn) 8%, var(--surface)); font-weight: 700; }
+    .intro { max-width: 1500px; margin: 0 auto; padding: 24px clamp(16px,3vw,42px) 0; }
+    .brief { border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-lg); overflow: clip; box-shadow: var(--shadow); }
+    .brief summary { cursor: pointer; list-style: none; padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 700; }
+    .brief summary::-webkit-details-marker { display: none; }
+    .brief summary::after { content: "收起"; color: var(--muted); font: 11px var(--mono); }
+    .brief:not([open]) summary::after { content: "展开"; }
+    .brief-body { padding: 0 20px 20px; display: grid; grid-template-columns: 1.15fr .85fr; gap: 28px; border-top: 1px solid var(--border); }
+    .brief-block { padding-top: 18px; }
+    .eyebrow { margin: 0 0 8px; color: var(--muted); font: 700 10px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    h2, h3, p { text-wrap: pretty; }
+    .brief h2 { max-width: 680px; margin: 0 0 10px; font: 700 clamp(23px,3vw,38px)/1.16 var(--display); letter-spacing: -.025em; }
+    .brief p { margin: 0; color: var(--muted); }
+    .assumptions { margin: 16px 0 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+    .assumptions li { display: grid; grid-template-columns: 20px 1fr; gap: 8px; align-items: start; }
+    .assumptions b { color: var(--fg); }
+    .assumptions span:first-child { color: var(--accent); font: 700 12px var(--mono); }
+    .trust-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-top: 14px; }
+    .trust-cell { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; background: var(--surface-2); }
+    .trust-cell strong { display: block; font: 800 16px var(--mono); }
+    .trust-cell small { color: var(--muted); font-size: 11px; }
+    .review-note { margin-top: 14px; padding: 12px; border: 1px dashed var(--border); color: var(--muted); border-radius: var(--radius-sm); font-size: 12px; }
+    .direction-zone { max-width: 1500px; margin: 0 auto; padding: 18px clamp(16px,3vw,42px); }
+    .direction-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
+    .direction-head h2 { margin: 0; font: 700 17px var(--display); }
+    .direction-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+    .direction-tabs { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+    .direction-tab { min-height: 74px; padding: 13px 14px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer; transition: border-color .18s var(--ease), transform .18s var(--ease), background .18s var(--ease); }
+    .direction-tab:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+    .direction-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+    .direction-tab strong { display: block; margin-bottom: 4px; font: 700 13px var(--display); }
+    .direction-tab span { color: var(--muted); font-size: 11px; }
+    .boundary { max-width: 1500px; margin: 0 auto 14px; padding: 0 clamp(16px,3vw,42px); }
+    .boundary-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--info) 34%, var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--info) 7%, var(--surface)); }
+    .boundary strong { font-size: 12px; }
+    .boundary span { color: var(--muted); font-size: 11px; }
+    .workspace { max-width: 1500px; min-height: 720px; margin: 0 auto 44px; padding: 0 clamp(16px,3vw,42px); display: grid; grid-template-columns: 212px minmax(0,1fr); gap: 14px; }
+    .side { position: sticky; top: 82px; height: fit-content; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 10px; box-shadow: var(--shadow); }
+    .side-context { padding: 10px 10px 13px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+    .side-context strong { display: block; font: 700 12px var(--display); }
+    .side-context span { color: var(--muted); font: 10px var(--mono); }
+    .nav-btn { width: 100%; min-height: 40px; padding: 9px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; text-align: left; color: var(--muted); }
+    .nav-btn:hover { background: var(--surface-2); color: var(--fg); }
+    .nav-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+    .nav-btn code { color: inherit; font: 9px var(--mono); opacity: .72; }
+    .privacy-note { margin: 12px 8px 4px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+    .main { min-width: 0; }
+    .page { animation: page-in .22s var(--ease) both; }
+    @keyframes page-in { from { opacity: 0; transform: translateY(4px); } }
+    .page-head { min-height: 58px; margin-bottom: 12px; display: flex; align-items: end; justify-content: space-between; gap: 18px; }
+    .page-head h2 { margin: 0; font: 700 clamp(20px,2vw,28px)/1.2 var(--display); letter-spacing: -.02em; }
+    .page-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn { min-height: 40px; padding: 9px 13px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); cursor: pointer; text-decoration: none; font-weight: 700; font-size: 12px; transition: transform .16s var(--ease), background .16s var(--ease), border-color .16s var(--ease); }
+    .btn:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+    .btn:disabled { opacity: .58; cursor: not-allowed; transform: none; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+    .btn.ghost { background: transparent; }
+    .panel { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+    .panel-pad { padding: 16px; }
+    .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .panel-title h3 { margin: 0; font: 700 13px var(--display); }
+    .panel-title span { color: var(--muted); font: 10px var(--mono); }
+    .stat-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 10px; }
+    .stat { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+    .stat span { color: var(--muted); font-size: 11px; }
+    .stat strong { display: block; margin-top: 6px; font: 750 25px/1 var(--mono); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+    .stat small { display: block; margin-top: 8px; color: var(--muted); font-size: 10px; }
+    .grid-2 { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(260px,.7fr); gap: 10px; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { padding: 11px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+    .table th { color: var(--muted); font: 700 9px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .table tbody tr:last-child td { border-bottom: 0; }
+    .table tbody tr { cursor: pointer; }
+    .table tbody tr:hover { background: var(--surface-2); }
+    .task-name strong { display: block; font-size: 12px; }
+    .task-name small { color: var(--muted); }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font: 700 9px var(--mono); white-space: nowrap; }
+    .pill.good { color: var(--good); border-color: color-mix(in srgb,var(--good) 34%,var(--border)); }
+    .pill.warn { color: var(--warn); border-color: color-mix(in srgb,var(--warn) 34%,var(--border)); }
+    .pill.bad { color: var(--bad); border-color: color-mix(in srgb,var(--bad) 34%,var(--border)); }
+    .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb,currentColor 12%,transparent); }
+    .source-list { display: grid; gap: 10px; }
+    .source-row { padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    .source-row:last-child { padding: 0; border: 0; }
+    .source-row header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .source-row strong { font-size: 11px; }
+    .source-row p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+    .today-card { padding: clamp(20px,3vw,34px); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow); }
+    .today-card h3 { max-width: 720px; margin: 0 0 12px; font: 700 clamp(24px,3vw,40px)/1.25 var(--display); letter-spacing: -.025em; }
+    .today-card > p { max-width: 680px; margin: 0; color: var(--muted); font-size: 14px; }
+    .next-actions { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; margin-top: 22px; }
+    .next-action { padding: 17px; border-top: 1px solid var(--border); }
+    .next-action b { display: block; margin-bottom: 4px; font: 700 15px var(--display); }
+    .next-action span { color: var(--muted); font-size: 12px; }
+    .timeline { margin-top: 12px; padding: 18px 20px; }
+    .timeline-row { display: grid; grid-template-columns: 88px 14px 1fr auto; gap: 12px; align-items: center; min-height: 52px; border-bottom: 1px solid var(--border); }
+    .timeline-row:last-child { border-bottom: 0; }
+    .timeline-row time { color: var(--muted); font: 11px var(--mono); }
+    .timeline-mark { width: 8px; height: 8px; border: 1px solid var(--accent); border-radius: 50%; }
+    .timeline-row strong { font-size: 12px; }
+    .timeline-row small { color: var(--muted); }
+    .radar-layout { display: grid; grid-template-columns: .78fr 1.35fr .9fr; gap: 8px; }
+    .radar-layout .panel { border-radius: 2px; }
+    .radar-face { position: relative; min-height: 260px; overflow: hidden; background: repeating-radial-gradient(circle at center, transparent 0 34px, var(--border) 35px 36px), linear-gradient(90deg, transparent 49.7%, var(--border) 50%, transparent 50.3%), linear-gradient(transparent 49.7%, var(--border) 50%, transparent 50.3%); }
+    .radar-face::after { content: ""; position: absolute; inset: -45%; background: conic-gradient(from 0deg at center, transparent 0 84%, color-mix(in srgb,var(--accent) 22%,transparent) 96%, transparent 100%); animation: sweep 5s linear infinite; }
+    @keyframes sweep { to { transform: rotate(1turn); } }
+    .target-point { position: absolute; z-index: 2; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+    .target-point.one { left: 36%; top: 40%; } .target-point.two { right: 26%; top: 30%; } .target-point.three { right: 39%; bottom: 24%; opacity: .45; }
+    .event-stream { display: grid; gap: 0; }
+    .event { display: grid; grid-template-columns: 62px 54px 1fr; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); font: 10px/1.45 var(--mono); }
+    .event:last-child { border-bottom: 0; }
+    .event[data-target] { cursor: pointer; }
+    .event[data-target]:hover, .event[data-target]:focus-visible { background: var(--surface-2); }
+    .event time, .event code { color: var(--muted); }
+    .event b { color: var(--good); }
+    .heatmap { display: grid; grid-template-columns: repeat(14,1fr); gap: 3px; margin: 12px; }
+    .heat { aspect-ratio: 1; border: 1px solid var(--border); background: var(--surface-2); position: relative; }
+    .heat.on { background: color-mix(in srgb,var(--accent) 24%,var(--surface)); border-color: color-mix(in srgb,var(--accent) 55%,var(--border)); }
+    .heat.stale { background: color-mix(in srgb,var(--warn) 16%,var(--surface)); }
+    .heat::after { content: attr(data-day); position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font: 8px var(--mono); }
+    .form-shell { padding: clamp(16px,2vw,24px); }
+    .form-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; }
+    .field { min-width: 0; }
+    .field.span-2 { grid-column: 1/-1; }
+    .field label, .fieldset-title { display: block; margin-bottom: 6px; font-weight: 700; font-size: 11px; }
+    .field label small, .fieldset-title small { color: var(--muted); font-weight: 400; }
+    input, select { width: 100%; min-height: 44px; padding: 10px 11px; color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+    .choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .check { min-height: 42px; padding: 9px 11px; display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); cursor: pointer; }
+    .check input { width: 15px; min-height: auto; accent-color: var(--accent); }
+    .form-footer { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .form-footer p { margin: 0; color: var(--muted); font-size: 11px; }
+    .detail-grid { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(280px,.7fr); gap: 10px; }
+    .detail-hero { padding: clamp(18px,3vw,28px); }
+    .detail-hero h3 { margin: 8px 0 4px; font: 700 clamp(21px,2.5vw,34px)/1.2 var(--display); }
+    .detail-hero > p { margin: 0; color: var(--muted); }
+    .detail-facts { display: grid; grid-template-columns: repeat(4,1fr); margin-top: 22px; border-top: 1px solid var(--border); }
+    .fact { padding: 14px 12px 0 0; }
+    .fact span { display: block; color: var(--muted); font-size: 10px; }
+    .fact strong { display: block; margin-top: 4px; font: 700 12px var(--mono); }
+    .signal { margin-top: 16px; padding: 13px; display: flex; align-items: start; justify-content: space-between; gap: 14px; border: 1px solid color-mix(in srgb,var(--warn) 38%,var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb,var(--warn) 7%,var(--surface)); }
+    .signal strong { display: block; font-size: 12px; }
+    .signal span { color: var(--muted); font-size: 10px; }
+    .rule-card { padding: 14px; border-bottom: 1px solid var(--border); }
+    .rule-card:last-child { border-bottom: 0; }
+    .rule-card header { display: flex; justify-content: space-between; gap: 10px; }
+    .rule-card h4 { margin: 0; font-size: 12px; }
+    .rule-card p { margin: 6px 0; color: var(--muted); font-size: 11px; }
+    .calendar-grid { display: grid; grid-template-columns: repeat(7,1fr); border: 1px solid var(--border); border-radius: var(--radius); overflow: clip; background: var(--border); gap: 1px; }
+    .day { min-height: 112px; padding: 10px; background: var(--surface); }
+    .day header { display: flex; justify-content: space-between; color: var(--muted); font: 10px var(--mono); }
+    .day strong { color: var(--fg); }
+    .day .marker { margin-top: 17px; padding: 6px 7px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 9px; }
+    .day .marker.rule { color: var(--accent); background: var(--accent-soft); }
+    .day .marker.stale { color: var(--warn); background: color-mix(in srgb,var(--warn) 9%,var(--surface)); }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--muted); font-size: 10px; }
+    .notice-list { display: grid; gap: 8px; }
+    .notice { padding: 13px 14px; display: grid; grid-template-columns: 100px 1fr auto; align-items: center; gap: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+    .notice time { color: var(--muted); font: 10px var(--mono); }
+    .notice strong { display: block; font-size: 12px; }
+    .notice p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+    .adapter-list { overflow: hidden; }
+    .adapter { padding: 14px; display: grid; grid-template-columns: minmax(180px,1.1fr) .7fr .55fr .9fr auto; align-items: center; gap: 14px; border-bottom: 1px solid var(--border); }
+    .adapter:last-child { border-bottom: 0; }
+    .adapter strong { display: block; font-size: 12px; }
+    .adapter small { color: var(--muted); font-size: 10px; }
+    .adapter .label { color: var(--muted); font-size: 9px; }
+    .state-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+    .state-card { min-height: 172px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+    .state-card h3 { margin: 10px 0 5px; font: 700 14px var(--display); }
+    .state-card p { margin: 0; color: var(--muted); font-size: 11px; }
+    .setup-banner { margin-bottom: 10px; padding: 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid color-mix(in srgb,var(--accent) 34%,var(--border)); border-radius: var(--radius); background: color-mix(in srgb,var(--accent) 6%,var(--surface)); }
+    .setup-banner h3 { margin: 0 0 4px; font: 700 15px var(--display); }
+    .setup-banner p { margin: 0; color: var(--muted); font-size: 11px; }
+    .setup-progress { min-width: 150px; text-align: right; }
+    .setup-progress strong { display: block; font: 750 22px/1 var(--mono); font-variant-numeric: tabular-nums; }
+    .setup-progress span { color: var(--muted); font-size: 10px; }
+    .setup-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+    .setup-card { padding: 16px; }
+    .setup-card.span-2 { grid-column: 1/-1; }
+    .setup-card > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .setup-card h3 { margin: 0; font: 700 13px var(--display); }
+    .setup-card header p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+    .status-list { display: grid; }
+    .status-row { min-width: 0; padding: 11px 0; display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 14px; border-top: 1px solid var(--border); }
+    .status-row:first-child { border-top: 0; }
+    .status-copy strong { display: block; font-size: 11px; }
+    .status-copy small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+    .status-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+    .path-value { font: 10px/1.45 var(--mono); color: var(--fg); }
+    .contract-strip { margin-top: 10px; padding: 12px; display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; border: 1px dashed var(--border); border-radius: var(--radius-sm); }
+    .contract-strip div { min-width: 0; }
+    .contract-strip span { display: block; color: var(--muted); font-size: 9px; }
+    .contract-strip strong { display: block; margin-top: 3px; font: 700 10px/1.4 var(--mono); overflow-wrap: anywhere; }
+    .skeleton { display: grid; gap: 7px; margin-top: 16px; }
+    .skeleton i { height: 8px; border-radius: 2px; background: linear-gradient(90deg,var(--surface-2),color-mix(in srgb,var(--border) 55%,var(--surface)),var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+    .skeleton i:nth-child(2) { width: 78%; } .skeleton i:nth-child(3) { width: 46%; }
+    @keyframes shimmer { to { background-position: -200% 0; } }
+    .empty-glyph { width: 34px; height: 24px; margin-top: 14px; border: 1px solid var(--border); border-top: 0; position: relative; }
+    .empty-glyph::before { content: ""; position: absolute; left: 8px; right: 8px; top: -6px; border-top: 1px solid var(--border); }
+    dialog { max-width: 540px; width: calc(100% - 32px); padding: 0; color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: 0 30px 90px rgba(0,0,0,.28); }
+    dialog::backdrop { background: rgba(4,10,18,.56); backdrop-filter: blur(5px); }
+    .modal { padding: 22px; }
+    .modal h2 { margin: 0 0 8px; font: 700 22px var(--display); }
+    .modal p { margin: 0 0 12px; color: var(--muted); }
+    .boundary-steps { margin: 16px 0; padding: 0; list-style: none; counter-reset: steps; }
+    .boundary-steps li { counter-increment: steps; display: grid; grid-template-columns: 26px 1fr; gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .boundary-steps li::before { content: counter(steps); width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--muted); font: 9px var(--mono); }
+    .toast { position: fixed; right: 20px; bottom: 20px; z-index: 70; max-width: 360px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--fg); color: var(--bg); opacity: 0; transform: translateY(8px); pointer-events: none; transition: .18s var(--ease); }
+    .toast.show { opacity: 1; transform: none; }
+    body[data-dir="B"] .workspace { grid-template-columns: 1fr; max-width: 1100px; }
+    body[data-dir="B"] .side { position: static; display: flex; align-items: center; overflow-x: auto; padding: 6px; }
+    body[data-dir="B"] .side-context, body[data-dir="B"] .privacy-note { display: none; }
+    body[data-dir="B"] .nav-btn { width: auto; min-width: max-content; justify-content: flex-start; padding-inline: 13px; }
+    body[data-dir="B"] .stat-grid { grid-template-columns: repeat(2,1fr); }
+    body[data-dir="B"] .grid-2 { grid-template-columns: 1fr; }
+    body[data-dir="B"] .form-grid { gap: 20px; }
+    body[data-dir="C"] .topbar { height: 48px; }
+    body[data-dir="C"] .brand-mark { border-radius: 2px; }
+    body[data-dir="C"] .intro { padding-top: 14px; }
+    body[data-dir="C"] .brief, body[data-dir="C"] .direction-tab, body[data-dir="C"] .panel, body[data-dir="C"] .stat { border-radius: 2px; }
+    body[data-dir="C"] .workspace { grid-template-columns: 158px minmax(0,1fr); gap: 8px; }
+    body[data-dir="C"] .side { top: 62px; border-radius: 2px; }
+    body[data-dir="C"] .nav-btn { min-height: 34px; border-radius: 2px; text-transform: uppercase; font: 10px var(--mono); }
+    body[data-dir="C"] .page-head { min-height: 44px; }
+    body[data-dir="C"] .page-head h2 { text-transform: uppercase; font-size: 18px; }
+    body[data-dir="C"] .panel-pad { padding: 12px; }
+    body[data-dir="C"] .table th, body[data-dir="C"] .table td { padding: 7px 8px; }
+    body[data-dir="C"] .stat { padding: 10px; }
+    body[data-dir="C"] .stat strong { font-size: 20px; }
+    @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .001ms !important; } }
+    @media (max-width: 1000px) {
+      .brief-body, .grid-2, .detail-grid { grid-template-columns: 1fr; }
+      .stat-grid { grid-template-columns: repeat(2,1fr); }
+      .radar-layout { grid-template-columns: 1fr 1fr; }
+      .radar-layout > :last-child { grid-column: 1/-1; }
+      .adapter { grid-template-columns: 1.4fr .7fr .7fr auto; }
+      .adapter > :nth-child(4) { display: none; }
+      .state-grid { grid-template-columns: repeat(2,1fr); }
+    }
+    @media (max-width: 760px) {
+      .topbar { height: auto; min-height: 58px; padding-block: 10px; }
+      .brand small, .top-meta > span:not(.demo-flag) { display: none; }
+      .top-meta { gap: 6px; }
+      .top-settings { width: 44px; min-height: 44px; padding: 0; }
+      .top-settings .desktop-label { display: none; }
+      .top-settings .mobile-label { display: inline; }
+      .intro { padding-top: 14px; }
+      .brief-body { gap: 6px; }
+      .trust-grid, .direction-tabs { grid-template-columns: 1fr; }
+      .direction-head { align-items: start; flex-direction: column; }
+      .direction-tab { min-height: 60px; }
+      .boundary-inner { align-items: start; flex-direction: column; }
+      .workspace, body[data-dir="C"] .workspace { grid-template-columns: 1fr; }
+      .side, body[data-dir="C"] .side { position: sticky; top: 58px; z-index: 20; display: flex; overflow-x: auto; padding: 5px; border-radius: var(--radius-sm); }
+      .side-context, .privacy-note { display: none; }
+      .nav-btn, body[data-dir="C"] .nav-btn { width: auto; min-width: max-content; min-height: 44px; justify-content: flex-start; padding-inline: 12px; }
+      .page-head { align-items: start; flex-direction: column; }
+      .actions { width: 100%; }
+      .actions .btn { flex: 1; }
+      .stat-grid, body[data-dir="B"] .stat-grid, .next-actions, .form-grid, .state-grid { grid-template-columns: 1fr; }
+      .table { display: block; max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+      .table thead, .table tbody { min-width: 680px; }
+      .field.span-2 { grid-column: auto; }
+      .radar-layout { grid-template-columns: 1fr; }
+      .radar-layout > :last-child { grid-column: auto; }
+      .detail-facts { grid-template-columns: repeat(2,1fr); gap: 10px; }
+      .calendar-grid { grid-template-columns: 1fr 1fr; border: 0; background: transparent; gap: 8px; }
+      .day { min-height: 104px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+      .notice { grid-template-columns: 1fr auto; }
+      .notice time { grid-column: 1/-1; }
+      .adapter { grid-template-columns: 1fr auto; }
+      .adapter > :nth-child(2), .adapter > :nth-child(3), .adapter > :nth-child(4) { display: none; }
+      .form-footer { align-items: stretch; flex-direction: column; }
+      .form-footer .actions { display: grid; }
+      .btn, .check { min-height: 44px; }
+      .setup-banner { align-items: start; flex-direction: column; }
+      .setup-progress { min-width: 0; text-align: left; }
+      .setup-grid { grid-template-columns: 1fr; }
+      .setup-card.span-2 { grid-column: auto; }
+      .status-row { grid-template-columns: 1fr; }
+      .status-actions { justify-content: flex-start; }
+      .contract-strip { grid-template-columns: repeat(2,1fr); }
+    }
+  </style>
+</head>
+<body data-dir="B">
+  <a class="skip" href="#app-main">跳到主要内容</a>
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">BJ</div><div><h1>北京挂号雷达</h1><small>个人私有 · 产品评审原型</small></div></div>
+    <div class="top-meta"><span>本地运行 · 无遥测</span><span>最后核验 2026-07-19 09:12</span><button class="top-settings" data-view="settings"><span class="desktop-label">首次配置 / 本机设置</span><span class="mobile-label">设置</span></button><span class="demo-flag">全站演示数据</span></div>
+  </header>
+
+  <section class="intro" aria-labelledby="brief-title">
+    <details class="brief" open>
+      <summary><span>评审起点：假设、边界与设计理由</span></summary>
+      <div class="brief-body">
+        <div class="brief-block">
+          <p class="eyebrow">Product assumptions</p>
+          <h2 id="brief-title">先减少不确定性，再谈“更快挂上号”</h2>
+          <p>这是一个个人信息雷达，不是抢号器。它负责整理公开规则、追踪变化、在可能值得核验时提醒；是否有号、是否满足预约条件、是否最终提交，全部以官方渠道当下页面为准。</p>
+          <ul class="assumptions">
+            <li><span>01</span><div><b>首批范围固定。</b>只服务北京同仁医院崇文门院区鼻科、北京协和医院皮肤科；全站数据均为演示。</div></li>
+            <li><span>02</span><div><b>协和只监测公开排班。</b>仅表达 <span class="mono">schedule_released</span> 与排班变化，不显示实时有号、无号或退号结论。</div></li>
+            <li><span>03</span><div><b>稳定开源、本地运行。</b>无 Docker、无云端、无遥测；SQLite 单进程，只保存提醒所需最少信息。</div></li>
+            <li><span>04</span><div><b>终点是官方渠道。</b>同仁鼻科默认做 C 级规则提醒并提供官方候补入口；所有预约仍由用户手动核验并提交。</div></li>
+          </ul>
+        </div>
+        <div class="brief-block">
+          <p class="eyebrow">Trust model</p>
+          <p><b>为什么三个方向共享同一信任模型：</b>评审应比较信息架构与心理感受，而不是让视觉差异稀释医疗数据边界。A / B / C 表示合规接入方式，不表示数据“好坏”。</p>
+          <div class="trust-grid">
+            <div class="trust-cell"><strong>A</strong><small>无需登录的官方公开页面 / 接口<br>监测公开排班变化</small></div>
+            <div class="trust-cell"><strong>B</strong><small>本机浏览器已有会话<br>仅向 127.0.0.1 返回脱敏状态</small></div>
+            <div class="trust-cell"><strong>C</strong><small>小程序 / 不可合规读取<br>只做规则提醒，不逆向</small></div>
+          </div>
+          <div class="review-note">设计取舍：A 把“可审计”放在首位；B 把“降低焦虑、下一步清楚”放在首位；C 把“单位屏幕的信息与变化密度”放在首位。三者均避免营销页结构、装饰卡片和虚构成功率。</div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <section class="direction-zone" aria-labelledby="direction-title">
+    <div class="direction-head"><div><h2 id="direction-title">切换评审方向</h2><p>不是换肤：导航语言、首页任务模型、密度与解释方式都会变化。</p></div><span class="pill" id="dir-pill">当前 B · 温暖克制的个人健康助理</span></div>
+    <div class="direction-tabs" role="tablist" aria-label="视觉与信息架构方向">
+      <button class="direction-tab" data-dir="A" role="tab" aria-selected="true"><strong>A · 专业医疗控制台</strong><span>侧栏工作区 / 来源审计 / 任务治理</span></button>
+      <button class="direction-tab" data-dir="B" role="tab" aria-selected="false"><strong>B · 温暖克制的个人健康助理</strong><span>阶段式导航 / 自然语言 / 下一步行动</span></button>
+      <button class="direction-tab" data-dir="C" role="tab" aria-selected="false"><strong>C · 高密度雷达监控台</strong><span>命令导航 / 时间网格 / 事件流</span></button>
+    </div>
+  </section>
+
+  <div class="boundary"><div class="boundary-inner"><div><strong>产品边界：只提醒，不代预约，不自动提交。</strong> <span>公开数据可能延迟、缺失或变化；所有预约信息必须在官方渠道重新核验。</span></div><button class="btn ghost" data-open-official>查看官方渠道边界</button></div></div>
+
+  <div class="workspace">
+    <nav class="side" id="side-nav" aria-label="产品导航"></nav>
+    <main class="main" id="app-main" tabindex="-1" aria-live="polite"></main>
+  </div>
+
+  <dialog id="official-dialog">
+    <div class="modal">
+      <p class="eyebrow">Manual completion boundary</p>
+      <h2>打开官方渠道，手动完成预约</h2>
+      <p>雷达只把你带到“值得核验”的时刻。进入官方渠道后，请重新确认医院、院区、科室、医生、日期、费用与就诊人资格。</p>
+      <ol class="boundary-steps">
+        <li><div><b>离开雷达</b><br><span>不传递身份证、医保卡或登录凭证。</span></div></li>
+        <li><div><b>在官方页面重新核验</b><br><span>演示信号不是可预约承诺。</span></div></li>
+        <li><div><b>由你手动选择并提交</b><br><span>雷达不会自动点击、占号或抢号。</span></div></li>
+      </ol>
+      <div class="review-note">评审环境不会跳转到任何未核验链接。稳定本地版只提供经过核验的医院官网、官方公众号或北京市预约挂号平台入口，不代理登录或提交。</div>
+      <div class="actions" style="margin-top:16px"><button class="btn primary" id="official-demo">确认边界（演示）</button><button class="btn" id="close-dialog">返回雷达</button></div>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    const state = {
+      dir: localStorage.getItem('bj-radar-dir') || 'B',
+      view: localStorage.getItem('bj-radar-view') || 'overview',
+      activeTarget: 'union',
+      taskCreated: false,
+      notificationEmpty: false,
+      browserAgentChecked: false,
+      liveProbeChecked: false
+    };
+    const targetData = {
+      union: {
+        code: 'U-DERM',
+        hospital: '北京协和医院',
+        campus: '院区以官方页面标注为准',
+        department: '皮肤科',
+        level: 'A',
+        confidence: '高',
+        summary: '无需登录的官方公开排班页面，可监测 schedule_released 与排班变化。',
+        boundary: '不读取实时有号、无号或退号，不把排班发布解释为可预约。',
+        officialAction: '打开官方渠道手动核验',
+        events: ['schedule_released / 排班发布', '公开排班变化', '公开页面结构异常']
+      },
+      tongren: {
+        code: 'TR-NOSE',
+        hospital: '北京同仁医院',
+        campus: '崇文门院区',
+        department: '鼻科',
+        level: 'C',
+        confidence: '高',
+        summary: '仅使用已核验规则，在放号前提醒，并保留官方候补入口。',
+        boundary: '小程序或不可合规读取来源不逆向、不抓取、不推断实时号源。',
+        officialAction: '打开官方候补入口',
+        events: ['已核验规则到期', '放号前提醒', '官方候补入口可查']
+      }
+    };
+    const dirMeta = {
+      A: { title: '专业医疗控制台', code: 'CONTROL', subtitle: '来源审计 / 任务治理 / 决策支持' },
+      B: { title: '个人健康助理', code: 'GUIDE', subtitle: '把复杂规则翻译成下一步行动' },
+      C: { title: '高密度雷达监控台', code: 'RADAR', subtitle: 'TARGETS / RULE GRID / EVENT LOG' }
+    };
+    const labels = {
+      A: { overview:['总览','01'], create:['创建关注任务','02'], detail:['任务详情','03'], calendar:['规则与排班日历','04'], notifications:['通知记录','05'], adapters:['数据接入','06'], states:['状态样本','07'], settings:['本机设置','08'] },
+      B: { overview:['现在','今日'], create:['新增一件关注','关注'], detail:['这项关注','详情'], calendar:['什么时候值得看','日历'], notifications:['我收到的提醒','记录'], adapters:['数据从哪里来','来源'], states:['如果信息不完整','状态'], settings:['首次配置','本机'] },
+      C: { overview:['RADAR','F1'], create:['NEW TARGET','F2'], detail:['TARGET INSPECT','F3'], calendar:['RULE GRID','F4'], notifications:['EVENT LOG','F5'], adapters:['ADAPTERS','F6'], states:['STATE LAB','F7'], settings:['LOCAL SETUP','F8'] }
+    };
+    const demoTag = `<span class='pill warn'><span class='dot'></span>演示数据</span>`;
+    const sourceTag = (level='A', confidence='高') => `<span class='pill'>等级 ${level}</span> <span class='pill good'>可信度 ${confidence}</span>`;
+    const navOrder = ['overview','create','detail','calendar','notifications','adapters','states','settings'];
+    if (!navOrder.includes(state.view)) state.view = 'overview';
+
+    function setDirection(dir) {
+      state.dir = dir;
+      localStorage.setItem('bj-radar-dir', dir);
+      document.body.dataset.dir = dir;
+      document.querySelectorAll('.direction-tab').forEach(btn => btn.setAttribute('aria-selected', String(btn.dataset.dir === dir)));
+      document.getElementById('dir-pill').textContent = `当前 ${dir} · ${dirMeta[dir].title}`;
+      render();
+    }
+    function go(view) {
+      state.view = view;
+      localStorage.setItem('bj-radar-view', view);
+      render();
+      window.scrollTo({ top: document.querySelector('.workspace').offsetTop - 70, behavior: 'smooth' });
+    }
+    function selectTarget(key) {
+      state.activeTarget = key;
+      go('detail');
+    }
+    function renderNav() {
+      const meta = dirMeta[state.dir];
+      document.getElementById('side-nav').innerHTML = `<div class='side-context'><strong>${meta.code}</strong><span>${meta.subtitle}</span></div>${navOrder.map(key => `<button class='nav-btn ${state.view===key?'active':''}' data-view='${key}'><span>${labels[state.dir][key][0]}</span><code>${labels[state.dir][key][1]}</code></button>`).join('')}<div class='privacy-note'>稳定开源 · 仅本机运行<br>SQLite 单进程 · 无遥测</div>`;
+    }
+    function pageHead(title, desc, actions='') {
+      return `<header class='page-head'><div><h2>${title}</h2><p>${desc}</p></div><div class='actions'>${actions}</div></header>`;
+    }
+    function targetRow(key, signal, signalClass='') {
+      const item = targetData[key];
+      return `<tr data-target='${key}' tabindex='0' role='button'><td class='task-name'><strong>${item.hospital} · ${item.campus} · ${item.department}</strong><small>${item.summary}</small></td><td class='mono'>${key==='union'?'公开排班':'规则提醒'}</td><td><span class='pill ${signalClass}'>${signal}</span></td><td>${sourceTag(item.level,item.confidence)}</td></tr>`;
+    }
+
+    function overviewA() {
+      return `${pageHead('总览','两项首批关注正在运行；先判断数据边界，再决定是否去官方渠道。',`<button class='btn primary' data-view='create'>创建关注任务</button>`)}
+        <div class='stat-grid'><div class='stat'><span>首批目标</span><strong>02</strong><small>协和皮肤科 · 同仁鼻科</small></div><div class='stat'><span>今日变化事件</span><strong>02</strong><small>全部为演示数据</small></div><div class='stat'><span>公开排班事件</span><strong>01</strong><small>schedule_released</small></div><div class='stat'><span>本地运行</span><strong>1×</strong><small>SQLite 单进程 · 无遥测</small></div></div>
+        <div class='grid-2'><section class='panel panel-pad'><div class='panel-title'><h3>关注任务</h3><span>仅首批真实范围</span></div><table class='table'><thead><tr><th>目标</th><th>能力</th><th>最新信号</th><th>接入 / 可信</th></tr></thead><tbody>${targetRow('union','排班已发布（演示）','good')}${targetRow('tongren','放号前提醒待触发','warn')}</tbody></table></section>
+        <aside class='panel panel-pad'><div class='panel-title'><h3>来源审计</h3><button class='btn ghost' data-view='adapters'>查看全部</button></div><div class='source-list'><div class='source-row'><header><strong>协和官方公开排班</strong><span class='pill good'>A · live probe</span></header><p>无需登录 · 只监测排班发布与变化</p></div><div class='source-row'><header><strong>本机 Browser Agent</strong><span class='pill'>B · 待检查</span></header><p>只向 127.0.0.1 返回脱敏有号 / 无号 / unknown</p></div><div class='source-row'><header><strong>同仁鼻科规则</strong><span class='pill warn'>C · 规则提醒</span></header><p>不逆向小程序 · 保留官方候补入口</p></div></div></aside></div>`;
+    }
+    function overviewB() {
+      return `${pageHead('早上好，今天只需要理解两个信号','没有真实余号结论；每一步都回到官方渠道手动确认。',`<button class='btn primary' data-view='create'>新增一件关注</button>`)}
+        <section class='today-card'><p class='eyebrow'>Today · 演示数据</p><h3>协和皮肤科公开排班已发布，但这不代表现在有号。</h3><p>雷达记录的是 <span class='mono'>schedule_released</span> 与排班变化。是否可预约、是否有退号，必须在协和官方渠道当下页面重新核验。</p><div class='next-actions'><div class='next-action'><b>现在可以做</b><span>查看排班变化依据，再决定是否打开官方渠道。</span><div style='margin-top:12px'><button class='btn primary' data-target='union'>查看协和皮肤科</button></div></div><div class='next-action'><b>同仁鼻科怎么处理</b><span>保持 C 级规则提醒，不读取小程序；放号前提醒并提供官方候补入口。</span><div style='margin-top:12px'><button class='btn' data-target='tongren'>查看同仁鼻科</button></div></div></div></section>
+        <section class='panel timeline'><div class='panel-title'><h3>接下来 14 天</h3><span>只呈现可合规确认的事件</span></div><div class='timeline-row'><time>今天 09:12</time><i class='timeline-mark'></i><div><strong>协和皮肤科：schedule_released</strong><br><small>A 级公开排班事件，不是实时有号或退号结论</small></div>${demoTag}</div><div class='timeline-row'><time>放号前</time><i class='timeline-mark'></i><div><strong>同仁崇文门院区鼻科：规则提醒</strong><br><small>C 级已核验规则，到点后前往官方候补入口</small></div><span class='pill warn'>待触发</span></div></section>`;
+    }
+    function overviewC() {
+      return `${pageHead('RADAR / ACTIVE TARGETS','SYS 09:12:04 · 2 targets · LOCAL_ONLY · NO_TELEMETRY',`<button class='btn primary' data-view='create'>NEW TARGET</button>`)}
+        <div class='stat-grid'><div class='stat'><span>TARGETS</span><strong>002</strong><small>U-DERM / TR-NOSE</small></div><div class='stat'><span>EVENTS_24H</span><strong>002</strong><small>DEMO_FLAG: TRUE</small></div><div class='stat'><span>PUBLIC_A</span><strong>UP</strong><small>SCHEDULE ONLY</small></div><div class='stat'><span>SQLITE_PROC</span><strong>001</strong><small>LOCAL / LOCKED</small></div></div>
+        <div class='radar-layout'><section class='panel'><div class='panel-title panel-pad'><h3>TARGET MAP</h3><span>DEMO SIGNALS</span></div><div class='radar-face'><i class='target-point one'></i><i class='target-point two'></i></div><div class='event' data-target='union' tabindex='0' role='button'><code>U-DERM</code><b>A</b><span>协和 / 皮肤科</span></div><div class='event' data-target='tongren' tabindex='0' role='button'><code>TR-NOSE</code><b>C</b><span>同仁崇文门 / 鼻科</span></div></section>
+        <section class='panel'><div class='panel-title panel-pad'><h3>14D RULE GRID</h3><button class='btn ghost' data-view='calendar'>EXPAND</button></div><div class='heatmap'>${Array.from({length:14},(_,i)=>`<div class='heat ${[1,6,10].includes(i)?'on':''} ${i===8?'stale':''}' data-day='${20+i}'></div>`).join('')}</div><div class='event-stream'><div class='event'><time>09:12:04</time><code>ADP-A</code><span>schedule_released · availability=unknown</span></div><div class='event'><time>08:40:19</time><code>RULE-C</code><span>TR-NOSE reminder window armed</span></div><div class='event'><time>07:55:03</time><code>LOCAL-B</code><span>browser agent idle · loopback only</span></div></div></section>
+        <section class='panel'><div class='panel-title panel-pad'><h3>EVENT STREAM</h3><button class='btn ghost' data-view='notifications'>LOG</button></div><div class='event-stream'><div class='event'><time>09:12</time><code>A</code><span>U-DERM schedule_released</span></div><div class='event'><time>08:40</time><code>C</code><span>TR-NOSE rule reminder armed</span></div><div class='event'><time>07:55</time><code>B</code><span>127.0.0.1 agent stopped</span></div><div class='event'><time>01:20</time><code>PRIV</code><span>cookie_upload=0 token_upload=0</span></div><div class='event'><time>00:00</time><code>SYS</code><span>cloud=0 telemetry=0 docker=0</span></div></div></section></div>`;
+    }
+    function renderOverview() { return state.dir==='A' ? overviewA() : state.dir==='B' ? overviewB() : overviewC(); }
+
+    function createEvents(key) {
+      return targetData[key].events.map((event,index) => `<label class='check'><input type='checkbox' ${index<2?'checked':''}>${event}</label>`).join('');
+    }
+    function renderCreate() {
+      const title = state.dir==='B' ? '告诉我，你想少操心哪一件事' : state.dir==='C' ? 'NEW TARGET / DEFINE WATCH CONDITION' : '创建关注任务';
+      const desc = state.dir==='B' ? '首批只支持协和皮肤科与同仁崇文门鼻科，接入等级由来源能力决定。' : state.dir==='C' ? 'SCOPE_LOCKED · LOCAL_ONLY · NO_AUTO_BOOKING' : '从首批真实范围选择目标；系统不会把接入等级当作实时号源能力。';
+      return `${pageHead(title,desc,`<button class='btn' data-view='overview'>取消</button>`)}<form class='panel form-shell' id='task-form'>
+        <div class='form-grid'><div class='field'><label for='hospital'>医院与科室 <small>首批范围</small></label><select id='hospital' required><option value='union' selected>北京协和医院 · 皮肤科</option><option value='tongren'>北京同仁医院 · 崇文门院区 · 鼻科</option></select></div>
+        <div class='field'><label for='campus'>院区</label><select id='campus' required><option value='official' selected>院区以官方页面标注为准</option><option value='chongwenmen'>崇文门院区</option></select></div>
+        <div class='field'><label for='department'>科室</label><select id='department' required><option value='dermatology' selected>皮肤科</option><option value='nose'>鼻科</option></select></div>
+        <div class='field'><label for='access-level'>默认接入策略</label><input id='access-level' value='A级 · 无需登录的官方公开排班' readonly></div>
+        <div class='field'><label for='range'>未来日期窗口</label><select id='range'><option>未来 7 天</option><option selected>未来 14 天</option></select></div>
+        <div class='field'><span class='fieldset-title'>时段</span><div class='choice-row'><label class='check'><input type='checkbox' checked>上午</label><label class='check'><input type='checkbox'>下午</label><label class='check'><input type='checkbox'>全天均可</label></div></div>
+        <div class='field span-2'><span class='fieldset-title'>可用提醒事件 <small id='event-hint'>协和仅支持公开排班发布 / 变化，不支持实时有号或退号结论</small></span><div class='choice-row' id='event-options'>${createEvents('union')}</div></div>
+        <div class='field span-2'><label for='channel'>提醒方式 <small>从本机发送</small></label><select id='channel'><option selected>Bark（已配置）</option><option>SMTP（未配置）</option></select></div></div>
+        <div class='form-footer'><p>提交后只在本机 SQLite 单进程中保存关注条件。无 Docker、无云端、无遥测，不保存或上传 Cookie / Token。</p><div class='actions'><button class='btn' type='button' data-view='overview'>返回总览</button><button class='btn primary' type='submit'>创建并查看任务</button></div></div></form>`;
+    }
+
+    function renderDetail() {
+      const key = state.activeTarget;
+      const item = targetData[key];
+      const isUnion = key === 'union';
+      const title = state.dir==='B' ? (isUnion ? '协和皮肤科：排班已发布，但还不能判断是否有号' : '同仁崇文门鼻科：按已核验规则等待提醒') : state.dir==='C' ? `TARGET ${item.code} / INSPECT` : '任务详情';
+      const headline = isUnion ? '公开排班已发布（演示），只记录排班发布与变化' : '按已核验规则，在放号前提醒并保留官方候补入口';
+      const lead = isUnion ? '最新事件为 schedule_released。该事件不包含实时有号、无号或退号信息。' : '默认 C 级。来源不可合规读取时不逆向，只在规则核验有效期内生成提醒。';
+      const signal = isUnion ? `<strong>schedule_released · 演示事件</strong><span>公开排班页面出现已发布状态；availability 保持 unknown，需前往官方渠道确认。</span>` : `<strong>放号前规则提醒已就绪 · 演示事件</strong><span>提醒依据来自已核验规则；到点后只提供官方候补入口，不读取小程序。</span>`;
+      const rules = isUnion ? [`排班发布|schedule_released`, `排班变化|公开页面内容变化`, `结论边界|不显示实时有号 / 退号`] : [`已核验规则|有效期内使用`, `放号前提醒|只在本机触发`, `官方候补入口|由用户手动完成`];
+      const rows = isUnion ? `<tr><td>协和官方公开排班页面</td><td>排班发布与排班变化</td><td class='mono'>2026-07-19 09:12</td><td>${sourceTag('A','高')}</td><td><span class='pill good'>schedule_released</span></td></tr><tr><td>实时号源 / 退号</td><td>不在 A 级能力内</td><td>—</td><td><span class='pill'>不支持</span></td><td><span class='pill'>必须官方核验</span></td></tr>` : `<tr><td>同仁鼻科官方规则</td><td>经人工核验后的放号规则摘要</td><td class='mono'>2026-07-18 18:30</td><td>${sourceTag('C','高')}</td><td><span class='pill good'>规则有效</span></td></tr><tr><td>小程序 / 不可合规读取来源</td><td>不逆向、不抓取</td><td>—</td><td><span class='pill'>不接入</span></td><td><span class='pill'>官方候补入口</span></td></tr>`;
+      return `${pageHead(title,`${item.hospital} · ${item.campus} · ${item.department}`,`<button class='btn' data-view='calendar'>查看规则日历</button><button class='btn primary' data-open-official>${item.officialAction}</button>`)}
+        <div class='detail-grid'><section class='panel detail-hero'>${demoTag}<h3>${headline}</h3><p>${lead}</p><div class='detail-facts'><div class='fact'><span>任务状态</span><strong style='color:var(--good)'>运行中</strong></div><div class='fact'><span>最后检查</span><strong>09:12:04</strong></div><div class='fact'><span>接入等级</span><strong>${item.level}</strong></div><div class='fact'><span>可信度</span><strong>${item.confidence}</strong></div></div><div class='signal'><div>${signal}</div><button class='btn' data-reverify>${isUnion?'重新探测公开排班':'重新核验规则'}</button></div></section>
+        <aside class='panel'><div class='panel-title panel-pad'><h3>提醒条件</h3><span>3 / 3 已启用</span></div>${rules.map(rule=>{const [name,desc]=rule.split('|');return `<div class='rule-card'><header><h4>${name}</h4><span class='pill good'>开启</span></header><p>${desc}</p></div>`}).join('')}</aside></div>
+        <section class='panel panel-pad' style='margin-top:10px'><div class='panel-title'><h3>依据与追溯</h3><span>所有数据均为评审演示</span></div><table class='table'><thead><tr><th>来源</th><th>读取内容</th><th>最后核验</th><th>等级 / 可信度</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    }
+
+    function renderCalendar() {
+      const isUnion = state.activeTarget === 'union';
+      const item = targetData[state.activeTarget];
+      const days = Array.from({length:14},(_,i)=>{
+        const d=20+i, day=d<=31?d:d-31, month=d<=31?'07':'08';
+        const marker = isUnion ? (i===1?`<div class='marker rule'>schedule_released · 演示</div>`:i===6?`<div class='marker rule'>排班变化 · 演示</div>`:'') : (i===3?`<div class='marker stale'>放号前提醒 · 演示</div>`:i===10?`<div class='marker'>规则复核点</div>`:'');
+        return `<div class='day'><header><span>${month}月</span><strong>${String(day).padStart(2,'0')}</strong></header>${marker}</div>`;
+      }).join('');
+      const summary = isUnion ? '协和皮肤科日历只标记公开排班发布与变化。它不展示实时有号、无号或退号，也不把 schedule_released 解释为可预约。' : '同仁崇文门院区鼻科日历来自已核验规则。系统只做放号前提醒，并提供官方候补入口；不逆向小程序。';
+      return `${pageHead(state.dir==='C'?'RULE GRID / 14D':'规则与排班日历',`${item.hospital} · ${item.campus} · ${item.department}`,`<button class='btn' data-view='detail'>返回任务</button>`)}<div class='legend'><span class='pill good'>${isUnion?'官方公开排班 · A':'已核验规则提醒 · C'}</span><span class='pill'>不提供实时号源结论</span>${demoTag}</div><section class='calendar-grid'>${days}</section><section class='panel panel-pad' style='margin-top:10px'><div class='panel-title'><h3>${isUnion?'公开排班事件说明':'规则提醒说明'}</h3><span>最后核验 2026-07-19 09:12</span></div><p style='margin:0;color:var(--muted)'>${summary}</p><div class='actions' style='margin-top:14px'><button class='btn' data-reverify>${isUnion?'重新探测公开排班':'重新核验规则'}</button><button class='btn primary' data-open-official>${item.officialAction}</button></div></section>`;
+    }
+
+    function renderNotifications() {
+      if (state.notificationEmpty) return `${pageHead('通知记录','已切换到“已处理”筛选。',`<button class='btn' data-toggle-empty>查看全部记录</button>`)}<section class='state-card' style='display:grid;place-items:center;text-align:center;min-height:360px'><div><div class='empty-glyph' style='margin-inline:auto'></div><h3>没有已处理通知</h3><p>新提醒会保留目标、来源、等级、核验时间与官方手动操作边界。</p><button class='btn' style='margin-top:16px' data-toggle-empty>返回全部通知</button></div></section>`;
+      return `${pageHead(state.dir==='C'?'EVENT LOG / NOTIFICATIONS':'通知记录','提醒是排班或规则事件，不是预约成功、实时有号或退号结论。',`<button class='btn' data-toggle-empty>查看已处理（演示空状态）</button>`)}<div class='notice-list'><article class='notice'><time>今天 09:12</time><div><strong>协和皮肤科：schedule_released</strong><p>来源：官方公开排班 · 等级 A · 可信度高 · 演示数据；availability=unknown</p></div><button class='btn' data-target='union'>查看依据</button></article><article class='notice'><time>今天 08:40</time><div><strong>同仁崇文门院区鼻科：放号前规则提醒已就绪</strong><p>来源：已核验规则 · 等级 C · 演示数据；到点后只提供官方候补入口</p></div><button class='btn' data-target='tongren'>查看规则</button></article><article class='notice'><time>昨天 16:02</time><div><strong>协和公开排班页面结构发生变化</strong><p>适配器已暂停；不会把解析失败解释为无号或排班取消。</p></div><span class='pill bad'>结果 unknown</span></article><article class='notice'><time>07-18 21:10</time><div><strong>Browser Agent 未运行</strong><p>B 级本机会话能力未启用；没有 Cookie / Token 上传。</p></div><button class='btn' data-view='settings'>检查本机设置</button></article></div>`;
+    }
+
+    function renderAdapters() {
+      return `${pageHead(state.dir==='C'?'ADAPTERS / ACCESS CONTRACT':'数据接入与来源','A / B / C 表示合规读取方式，不表示实时号源可信等级。',`<button class='btn' data-view='settings'>首次配置 / 本机设置</button><button class='btn' data-view='states'>查看异常状态</button>`)}<section class='panel adapter-list'><div class='adapter'><div><strong>北京协和医院皮肤科 · 官方公开排班</strong><small>无需登录；只监测 schedule_released 与排班变化</small></div><div><span class='label'>接入 / 可信</span><br>${sourceTag('A','高')}</div><div><span class='pill good'><i class='dot'></i>live probe 就绪</span></div><div class='mono'>09:12:04 · 1.2s</div><button class='btn' data-live-probe>立即探测</button></div><div class='adapter'><div><strong>本机 Browser Agent</strong><small>复用用户本机已有会话；只向 127.0.0.1 返回脱敏有号 / 无号 / unknown</small></div><div>${sourceTag('B','会话有效时')}</div><div><span class='pill'>未运行</span></div><div class='mono'>COOKIE_UPLOAD=0</div><button class='btn' data-view='settings'>本机设置</button></div><div class='adapter'><div><strong>北京同仁医院崇文门院区鼻科</strong><small>小程序 / 不可合规读取时只做已核验规则、放号前提醒与官方候补入口</small></div><div>${sourceTag('C','高')}</div><div><span class='pill warn'>规则提醒</span></div><div class='mono'>NO_REVERSE</div><button class='btn' data-target='tongren'>查看规则</button></div></section><div class='review-note'>安全策略：A 级页面失败时显示 unknown；B 级不上传 Cookie / Token；C 级不逆向。任何空响应都不能解释为“无号”。</div>`;
+    }
+
+    function renderStates() {
+      return `${pageHead(state.dir==='C'?'STATE LAB / FAILURE MODES':'状态样本','异常时宁可显示 unknown、暂停或规则过期，也不生成号源结论。',`<button class='btn' data-view='overview'>返回总览</button>`)}<div class='state-grid'><article class='state-card'><span class='pill'>LOADING · A</span><h3>正在探测协和公开排班</h3><p>只等待 schedule_released 或排班变化；加载中不显示有号 / 无号。</p><div class='skeleton'><i></i><i></i><i></i></div></article><article class='state-card'><span class='pill'>EMPTY</span><h3>暂无通知记录</h3><p>说明筛选范围和下一步，不用装饰内容填空。</p><div class='empty-glyph'></div></article><article class='state-card'><span class='pill bad'>ERROR · A</span><h3>协和公开排班页面结构已变化</h3><p>解析暂停，排班结果为 unknown；不会解释为无号或退号结束。</p><button class='btn' style='margin-top:14px' data-reverify>重试探测</button></article><article class='state-card'><span class='pill warn'>UNKNOWN · B</span><h3>本机浏览器会话不可用</h3><p>Browser Agent 只返回 unknown，不上传 Cookie / Token。</p><button class='btn' style='margin-top:14px' data-view='settings'>检查本机状态</button></article><article class='state-card'><span class='pill warn'>STALE · C</span><h3>同仁鼻科规则需要重新核验</h3><p>暂停放号前提醒；不尝试逆向小程序获取新结论。</p><button class='btn' style='margin-top:14px' data-target='tongren'>查看规则依据</button></article><article class='state-card'><span class='pill'>MANUAL</span><h3>预约仍在官方渠道完成</h3><p>雷达不自动点击、占号、提交预约或代替官方候补流程。</p><button class='btn' style='margin-top:14px' data-open-official>查看官方手动边界</button></article></div>`;
+    }
+
+    function renderSettings() {
+      const browserStatus = state.browserAgentChecked ? '已停止' : '待检查';
+      const probeStatus = state.liveProbeChecked ? '刚刚通过' : '待自检';
+      return `${pageHead(state.dir==='C'?'LOCAL SETUP / FIRST RUN':'首次配置 / 本机设置','稳定开源、本地运行；不依赖 Docker、云端服务或遥测。',demoTag)}
+        <section class='setup-banner'><div><h3>本机检查：4 / 5 项可用</h3><p>SMTP 未配置不阻塞运行；Bark、SQLite、公开来源与隐私边界可独立自检。</p></div><div class='setup-progress'><strong>80%</strong><span>FIRST_RUN · DEMO</span></div></section>
+        <div class='setup-grid'><section class='panel setup-card'><header><div><h3>本地数据目录</h3><p>关注任务、规则快照与通知记录只保存在这里</p></div><span class='pill good'>可写</span></header><div class='status-list'><div class='status-row'><div class='status-copy'><strong>应用数据目录</strong><small class='path-value'>~/Library/Application Support/beijing-appointment-radar/</small></div><div class='status-actions'><button class='btn' data-local-action>在 Finder 中查看（演示）</button></div></div><div class='status-row'><div class='status-copy'><strong>SQLite 单进程</strong><small>单一写入进程 · 本地文件锁正常</small></div><span class='pill good'>运行中</span></div></div></section>
+        <section class='panel setup-card'><header><div><h3>通知渠道自检</h3><p>凭据与 secret 只显示配置状态，不显示值</p></div><span class='pill'>本机发送</span></header><div class='status-list'><div class='status-row'><div class='status-copy'><strong>Bark</strong><small>设备密钥不展示、不上传</small></div><div class='status-actions'><span class='pill good'>已配置</span><button class='btn' data-self-test='Bark'>发送自检（演示）</button></div></div><div class='status-row'><div class='status-copy'><strong>SMTP</strong><small>用户名、密码与服务器地址不展示</small></div><div class='status-actions'><span class='pill'>未配置</span><button class='btn' data-self-test='SMTP'>检查配置</button></div></div></div></section>
+        <section class='panel setup-card'><header><div><h3>公开来源 live probe</h3><p>只验证无需登录的官方公开来源</p></div><span class='pill ${state.liveProbeChecked?'good':''}'>${probeStatus}</span></header><div class='status-list'><div class='status-row'><div class='status-copy'><strong>北京协和医院皮肤科 · A 级</strong><small>探测 schedule_released / 排班变化；不探测实时有号、无号或退号</small></div><div class='status-actions'><button class='btn' data-live-probe>运行 live probe</button></div></div><div class='status-row'><div class='status-copy'><strong>北京同仁医院崇文门院区鼻科 · C 级</strong><small>不运行 live probe；使用已核验规则与官方候补入口</small></div><div class='status-actions'><span class='pill warn'>规则模式</span><button class='btn' data-open-official>官方候补入口</button></div></div></div></section>
+        <section class='panel setup-card'><header><div><h3>Browser Agent 状态</h3><p>B 级能力只在本机回环地址工作</p></div><span class='pill'>${browserStatus}</span></header><div class='status-list'><div class='status-row'><div class='status-copy'><strong>127.0.0.1 本机连接</strong><small>仅返回脱敏有号 / 无号 / unknown；不上传 Cookie / Token</small></div><div class='status-actions'><button class='btn' data-browser-check>检查本机连接</button></div></div><div class='status-row'><div class='status-copy'><strong>会话与 secret</strong><small>浏览器会话由用户本机持有，产品不读取具体值</small></div><span class='pill'>未配置</span></div></div></section>
+        <section class='panel setup-card span-2'><header><div><h3>隐私检查</h3><p>每次首次配置都可重新运行</p></div><button class='btn' data-privacy-check>重新检查</button></header><div class='contract-strip'><div><span>COOKIE / TOKEN 上传</span><strong>0 · PASS</strong></div><div><span>云端请求</span><strong>0 · PASS</strong></div><div><span>遥测</span><strong>关闭 · PASS</strong></div><div><span>Docker 依赖</span><strong>无 · PASS</strong></div></div><div class='review-note'>开源本地程序只保存提醒所需最少信息；不采集身份证、医保卡或就诊人完整身份。所有预约与候补操作均由用户在官方渠道手动完成。</div><div class='actions' style='margin-top:14px'><button class='btn primary' data-save-settings>保存本机设置（演示）</button></div></section></div>`;
+    }
+
+    function render() {
+      renderNav();
+      const renderers = { overview:renderOverview, create:renderCreate, detail:renderDetail, calendar:renderCalendar, notifications:renderNotifications, adapters:renderAdapters, states:renderStates, settings:renderSettings };
+      document.getElementById('app-main').innerHTML = `<div class='page'>${renderers[state.view]()}</div>`;
+      bindDynamic();
+    }
+    function toast(message) {
+      const el = document.getElementById('toast');
+      el.textContent = message;
+      el.classList.add('show');
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => el.classList.remove('show'), 2200);
+    }
+    function bindTargetControls() {
+      document.querySelectorAll('#app-main [data-target]').forEach(el => {
+        const activate = () => selectTarget(el.dataset.target);
+        el.addEventListener('click', activate);
+        el.addEventListener('keydown', ev => { if (ev.key==='Enter' || ev.key===' ') { ev.preventDefault(); activate(); } });
+      });
+    }
+    function bindCreateForm() {
+      const hospital = document.getElementById('hospital');
+      if (!hospital) return;
+      const applyDefaults = () => {
+        const key = hospital.value;
+        const isUnion = key === 'union';
+        document.getElementById('campus').value = isUnion ? 'official' : 'chongwenmen';
+        document.getElementById('department').value = isUnion ? 'dermatology' : 'nose';
+        document.getElementById('access-level').value = isUnion ? 'A级 · 无需登录的官方公开排班' : 'C级 · 已核验规则 + 放号前提醒';
+        document.getElementById('event-hint').textContent = isUnion ? '协和仅支持公开排班发布 / 变化，不支持实时有号或退号结论' : '同仁鼻科不逆向小程序，只做规则提醒与官方候补入口';
+        document.getElementById('event-options').innerHTML = createEvents(key);
+      };
+      hospital.addEventListener('change', applyDefaults);
+      const form = document.getElementById('task-form');
+      form.addEventListener('submit', ev => {
+        ev.preventDefault();
+        state.taskCreated = true;
+        state.activeTarget = hospital.value;
+        toast('关注任务已保存到本机 SQLite（演示）');
+        go('detail');
+      });
+    }
+    function bindDynamic() {
+      document.querySelectorAll('#side-nav [data-view], #app-main [data-view]').forEach(el => el.addEventListener('click', () => go(el.dataset.view)));
+      bindTargetControls();
+      document.querySelectorAll('#app-main [data-open-official]').forEach(el => el.addEventListener('click', () => document.getElementById('official-dialog').showModal()));
+      document.querySelectorAll('[data-reverify]').forEach(el => el.addEventListener('click', () => {
+        const old = el.textContent;
+        el.disabled = true;
+        el.textContent = '核验中…';
+        setTimeout(() => { el.disabled=false; el.textContent=old; toast('演示：核验完成，结果与来源快照已保存在本机'); }, 850);
+      }));
+      document.querySelectorAll('[data-toggle-empty]').forEach(el => el.addEventListener('click', () => { state.notificationEmpty=!state.notificationEmpty; render(); }));
+      document.querySelectorAll('[data-self-test]').forEach(el => el.addEventListener('click', () => {
+        toast(el.dataset.selfTest==='Bark' ? 'Bark 自检通过（演示）：通知由本机发出' : 'SMTP 未配置：请先在本机完成配置');
+      }));
+      document.querySelectorAll('[data-live-probe]').forEach(el => el.addEventListener('click', () => { state.liveProbeChecked=true; render(); toast('协和公开排班 live probe 通过（演示）：仅检测排班事件'); }));
+      document.querySelectorAll('[data-browser-check]').forEach(el => el.addEventListener('click', () => { state.browserAgentChecked=true; render(); toast('Browser Agent 已检查：当前已停止，未上传 Cookie / Token'); }));
+      document.querySelectorAll('[data-privacy-check]').forEach(el => el.addEventListener('click', () => toast('隐私检查通过（演示）：云端、遥测与凭据上传均为 0')));
+      document.querySelectorAll('[data-local-action]').forEach(el => el.addEventListener('click', () => toast('演示：本地数据目录可访问')));
+      document.querySelectorAll('[data-save-settings]').forEach(el => el.addEventListener('click', () => toast('本机设置已保存（演示）')));
+      bindCreateForm();
+    }
+    document.querySelectorAll('.direction-tab').forEach(btn => btn.addEventListener('click', () => setDirection(btn.dataset.dir)));
+    document.querySelector('.top-settings').addEventListener('click', () => go('settings'));
+    document.getElementById('close-dialog').addEventListener('click', () => document.getElementById('official-dialog').close());
+    document.getElementById('official-demo').addEventListener('click', () => { document.getElementById('official-dialog').close(); toast('已确认：真实预约与候补只在官方渠道手动完成'); });
+    document.body.addEventListener('click', ev => {
+      const target = ev.target.closest('[data-open-official]');
+      if (target && !document.getElementById('app-main').contains(target)) document.getElementById('official-dialog').showModal();
+    });
+    setDirection(state.dir);
+  </script>
+</body>
+</html>

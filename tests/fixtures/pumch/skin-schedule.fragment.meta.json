@@ -1,0 +1,15 @@
+{
+  "adapterKey": "pumch-public-dermatology-schedule",
+  "adapterVersion": "1.0.0",
+  "sourceUrl": "https://www.pumch.cn/expert_chuzhen_week/%E7%9A%AE%E8%82%A4%E7%A7%91/3/1.html?linkage=990473",
+  "collectedDate": "2026-07-19",
+  "contentSha256": "b09d112f5894ccc23a464cc4e36f0044dee71818d86635c3bf8fe052ae0a0879",
+  "hashScope": "fixture_file_after_redaction",
+  "captureMode": "rendered_public_dom_fragment",
+  "sanitized": true,
+  "redactions": [
+    "公开医生姓名替换为医生甲/乙/丙/丁",
+    "医生详情链接替换为不可用数字占位路径",
+    "删除与排班解析无关的页面导航、页脚和其他科室"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "北京挂号雷达 · 本机 Browser Agent",
+  "version": "0.1.0",
+  "description": "默认关闭、尚待真实会话验证的本机实验性状态读取工具。",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://127.0.0.1:3210/*"],
+  "action": {
+    "default_title": "读取当前官方页面",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pumch.cn/*",
+        "https://*.pumch.cn/*",
+        "https://pumchapp.pumch.cn/*",
+        "https://*.pumchapp.pumch.cn/*",
+        "https://trhos.com/*",
+        "https://*.trhos.com/*",
+        "https://bjtrhos.cn/*",
+        "https://*.bjtrhos.cn/*",
+        "https://114yygh.com/*",
+        "https://*.114yygh.com/*"
+      ],
+      "js": ["shared.js", "content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

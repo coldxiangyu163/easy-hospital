@@ -1,0 +1,117 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import type { FastifyInstance } from 'fastify';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { NotificationChannel } from '../../src/core/notification-channel.js';
+import type { SourceAdapter } from '../../src/core/source-adapter.js';
+import { buildApp } from '../../src/server/app.js';
+
+describe('写 API Origin 边界', () => {
+  let app: FastifyInstance | undefined;
+  let directory: string | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    if (directory) await rm(directory, { recursive: true, force: true });
+  });
+
+  it('外部 http(s) Origin 无法触发通知自检或 live probe 副作用', async () => {
+    const send = vi.fn<NotificationChannel['send']>(async () => ({
+      status: 'accepted',
+      providerMessageId: 'provider-id',
+    }));
+    const check = vi.fn<SourceAdapter['check']>(async () => ({
+      status: 'OK',
+      observedAt: '2026-07-19T00:00:00.000Z',
+      nextAllowedAt: null,
+      contentHash: 'a'.repeat(64),
+      observations: [],
+    }));
+    const channel: NotificationChannel = { key: 'origin-capture', send };
+    const adapter: SourceAdapter = {
+      manifest: {
+        adapterKey: 'pumch-public-dermatology-schedule',
+        contractVersion: 1,
+        version: '1.0.0-test',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['www.pumch.cn'],
+        minIntervalMs: 300_000,
+      },
+      check,
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-origin-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      notificationChannelStatuses: [{ key: channel.key, enabled: true, reason: null }],
+      sourceAdapters: [adapter],
+    });
+    const headers = { host: '127.0.0.1', origin: 'https://attacker.example' };
+
+    const notification = await app.inject({
+      method: 'POST',
+      url: `/api/notifications/${channel.key}/test`,
+      headers,
+    });
+    const liveProbe = await app.inject({
+      method: 'POST',
+      url: '/api/source-adapters/pumch-public-dermatology-schedule/live-probe',
+      headers,
+    });
+
+    expect(notification.statusCode).toBe(403);
+    expect(liveProbe.statusCode).toBe(403);
+    expect(send).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+    const persisted = await app.inject({
+      method: 'GET',
+      url: `/api/notifications/${channel.key}/test-result`,
+      headers: { host: '127.0.0.1' },
+    });
+    expect(persisted.statusCode).toBe(404);
+  });
+
+  it('带 Origin 的管理写请求只接受 loopback origin', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-origin-'));
+    app = await buildApp({ databasePath: join(directory, 'data.sqlite3') });
+    const payload = {
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      matchMode: 'any_expert',
+      doctorName: null,
+      titles: [],
+      dateFrom: '2026-07-20',
+      dateTo: '2026-07-20',
+      session: 'AM',
+      eventTypes: ['schedule_released'],
+      remindBeforeMinutes: 5,
+    };
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1', origin: 'http://attacker.example' },
+      payload,
+    });
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1', origin: 'http://localhost:5173' },
+      payload,
+    });
+
+    expect(rejected.statusCode).toBe(403);
+    expect(accepted.statusCode).toBe(201);
+    const tasks = await app.inject({
+      method: 'GET',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1' },
+    });
+    expect(tasks.json().tasks).toHaveLength(1);
+  });
+});
