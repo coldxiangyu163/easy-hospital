@@ -451,6 +451,86 @@ describe('规则重排与提醒批次终态', () => {
     expect(messages[0]!.text).toContain('预计 16:00 放号');
   });
 
+  it('主备规则同为 15:00 时，running 旧规则在 occurrenceAt 终止后仍补排当次备用提醒', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    let sends = 0;
+    const capture: NotificationChannel = {
+      key: 'same-occurrence-fallback',
+      async send() {
+        sends += 1;
+        return { status: 'accepted', providerMessageId: 'same-occurrence-ok' };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-rule-same-occurrence-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const options = {
+      databasePath,
+      notificationChannels: [capture],
+      workerPollMs: 60_000,
+      now: () => now,
+    };
+    app = await buildApp(options);
+    const task = (
+      await app.inject({ method: 'POST', url: '/api/watch-tasks', headers, payload: taskPayload })
+    ).json();
+    const backup = await app.inject({
+      method: 'POST',
+      url: '/api/release-rules',
+      headers,
+      payload: {
+        hospitalId: taskPayload.hospitalId,
+        campusId: taskPayload.campusId,
+        departmentId: taskPayload.departmentId,
+        advanceDays: 7,
+        releaseTimeLocal: '15:00',
+        sameDayPolicy: '以官方页面为准',
+        officialEntryUrl: 'https://www.bjtrhos.cn/Html/News/Articles/7104.html',
+        sourceUrl: 'https://news.bjd.com.cn/2024/07/02/10822953.shtml',
+        verifiedAt: '2026-07-19T01:00:00.000Z',
+        confidence: 'low',
+        needsReconfirmation: true,
+      },
+    });
+    expect(backup.statusCode).toBe(201);
+    const backupRuleId = backup.json().id as string;
+
+    now = firstReminderAt;
+    database = openDatabase(databasePath);
+    const running = new SqliteJobRunner(database).claimNext({ now, leaseMs: 30_000 });
+    expect(running).toMatchObject({
+      type: 'release-reminder',
+      state: 'running',
+      payload: { taskId: task.id, ruleId },
+    });
+    const disabled = await app.inject({
+      method: 'PATCH',
+      url: `/api/release-rules/${ruleId}`,
+      headers,
+      payload: { enabled: false },
+    });
+    expect(disabled.statusCode).toBe(200);
+    database.close();
+    database = undefined;
+    await app.close();
+    app = undefined;
+
+    now = Date.parse('2026-07-19T07:00:00.000Z');
+    app = await buildApp({ ...options, workerPollMs: 5 });
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
+
+    const inspector = openDatabase(databasePath);
+    const fallback = inspector
+      .prepare(
+        `SELECT state FROM job
+         WHERE type = 'release-reminder'
+           AND json_extract(payload_json, '$.ruleId') = ?
+           AND json_extract(payload_json, '$.occurrenceAt') = ?`,
+      )
+      .get(backupRuleId, now) as { state: string } | undefined;
+    inspector.close();
+    expect(fallback?.state).toBe('succeeded');
+  });
+
   it('规则变更后漏网旧 job 被 worker 校验拦截：0 发送、RULE_CHANGED 终态', async () => {
     let now = Date.parse('2026-07-19T00:00:00.000Z');
     let sends = 0;

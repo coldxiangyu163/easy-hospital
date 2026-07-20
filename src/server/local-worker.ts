@@ -371,7 +371,7 @@ export class LocalWorker {
     const selectedRule = getEnabledReleaseRuleForScope(this.database, task);
     if (!rule || !rule.enabled || selectedRule?.id !== rule.id) {
       this.runner.complete(job.id, now);
-      scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now + 1);
+      scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now);
       return;
     }
     // reminderAt 是不可变的首次计划时刻：job.runAt 会被重试退避和
@@ -453,37 +453,55 @@ export class LocalWorker {
         now,
       );
       this.runner.complete(job.id, now);
-      scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now + 1);
+      scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now);
       return;
     }
     if (now > payload.occurrenceAt) {
-      const hadChannelAttempt = Boolean(
-        this.database
-          .prepare(
-            `SELECT 1
-             FROM notification_batch nb
-             JOIN notification_delivery nd ON nd.batch_id = nb.id
-             WHERE nb.task_id = ?
-               AND nb.official_entry_url = ?
-               AND json_extract(nb.event_ids_json, '$.kind') = 'release-reminder'
-               AND json_extract(nb.event_ids_json, '$.occurrenceAt') = ?
-               AND json_extract(nb.event_ids_json, '$.targetDate') = ?
-               AND nd.attempts > 0
-             LIMIT 1`,
-          )
-          .get(
-            task.id,
-            payload.officialEntryUrl,
-            payload.occurrenceAt,
-            payload.targetDate,
-          ),
-      );
-      finishExpiredReminder(
-        hadChannelAttempt
-          ? 'RELEASE_REMINDER_RETRY_EXPIRED'
-          : 'RELEASE_REMINDER_MISSED',
-        now,
-      );
+      const existingBatch = this.database
+        .prepare(
+          `SELECT
+             nb.state,
+             EXISTS (
+               SELECT 1 FROM notification_delivery nd
+               WHERE nd.batch_id = nb.id
+                 AND nd.state = 'pending'
+                 AND nd.attempts > 0
+                 AND nd.last_error_code IS NOT NULL
+             ) AS retryable_pending,
+             EXISTS (
+               SELECT 1 FROM notification_delivery nd
+               WHERE nd.batch_id = nb.id AND nd.attempts > 0
+             ) AS attempted
+           FROM notification_batch nb
+           WHERE nb.task_id = ?
+             AND nb.official_entry_url = ?
+             AND json_extract(nb.event_ids_json, '$.kind') = 'release-reminder'
+             AND json_extract(nb.event_ids_json, '$.occurrenceAt') = ?
+             AND json_extract(nb.event_ids_json, '$.targetDate') = ?
+           LIMIT 1`,
+        )
+        .get(
+          task.id,
+          payload.officialEntryUrl,
+          payload.occurrenceAt,
+          payload.targetDate,
+        ) as
+        | { state: string; retryable_pending: 0 | 1; attempted: 0 | 1 }
+        | undefined;
+      if (existingBatch?.retryable_pending === 1) {
+        finishExpiredReminder('RELEASE_REMINDER_RETRY_EXPIRED', now);
+        return;
+      }
+      if (
+        existingBatch &&
+        (existingBatch.attempted === 1 ||
+          ['failed', 'sent', 'delivery_unknown'].includes(existingBatch.state))
+      ) {
+        this.runner.complete(job.id, now);
+        scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now + 1);
+        return;
+      }
+      finishExpiredReminder('RELEASE_REMINDER_MISSED', now);
       return;
     }
     if (channelKeys.length === 0) {

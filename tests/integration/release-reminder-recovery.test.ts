@@ -324,6 +324,110 @@ describe('Release reminder 恢复状态机', () => {
     expect(sends).toBe(1);
   });
 
+  it('永久失败 delivery 后 complete 前崩溃，恢复时不改写为 retry expired', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    const reminderAt = Date.parse('2026-07-19T06:55:00.000Z');
+    const occurrenceAt = Date.parse('2026-07-19T07:00:00.000Z');
+    let sends = 0;
+    const channel: NotificationChannel = {
+      key: 'reminder-permanent-failure',
+      async send() {
+        sends += 1;
+        return { status: 'rejected', errorCode: 'PERMANENT_FAILURE', retryable: false };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-permanent-crash-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const options = {
+      databasePath,
+      notificationChannels: [channel],
+      workerPollMs: 5,
+      now: () => now,
+    };
+    app = await buildApp(options);
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: reminderTaskPayload,
+    });
+
+    database = openDatabase(databasePath);
+    database
+      .prepare(
+        `CREATE TRIGGER simulate_release_reminder_complete_crash
+         BEFORE UPDATE OF state ON job
+         WHEN OLD.type = 'release-reminder'
+           AND OLD.state = 'running'
+           AND NEW.state = 'succeeded'
+         BEGIN
+           SELECT RAISE(ABORT, 'simulate crash before complete');
+         END`,
+      )
+      .run();
+
+    now = reminderAt;
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
+    await expect
+      .poll(
+        async () =>
+          (
+            await app!.inject({ method: 'GET', url: '/api/notification-batches', headers })
+          ).json().batches[0],
+        { timeout: 1_000 },
+      )
+      .toMatchObject({
+        state: 'failed',
+        terminalReason: null,
+        deliveries: [
+          expect.objectContaining({
+            state: 'failed',
+            errorCode: 'PERMANENT_FAILURE',
+            attempts: 1,
+          }),
+        ],
+      });
+    database.prepare('DROP TRIGGER simulate_release_reminder_complete_crash').run();
+    database.close();
+    database = undefined;
+    await app.close();
+    app = undefined;
+
+    now = occurrenceAt + 60_000;
+    app = await buildApp(options);
+    database = openDatabase(databasePath);
+    await expect
+      .poll(
+        () =>
+          (
+            database!.prepare(
+              `SELECT state FROM job
+               WHERE type = 'release-reminder'
+                 AND json_extract(payload_json, '$.occurrenceAt') = ?`,
+            ).get(occurrenceAt) as { state: string } | undefined
+          )?.state,
+        { timeout: 1_000 },
+      )
+      .toBe('succeeded');
+
+    const batch = (
+      await app.inject({ method: 'GET', url: '/api/notification-batches', headers })
+    ).json().batches[0];
+    expect(batch).toMatchObject({
+      state: 'failed',
+      terminalReason: null,
+      deliveries: [
+        expect.objectContaining({
+          state: 'failed',
+          errorCode: 'PERMANENT_FAILURE',
+          attempts: 1,
+        }),
+      ],
+    });
+    expect(sends).toBe(1);
+  });
+
   it('提前 30 分钟提醒保留 1/5/15 分钟完整重试阶梯', async () => {
     let now = Date.parse('2026-07-19T00:00:00.000Z');
     let sends = 0;
