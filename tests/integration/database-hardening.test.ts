@@ -53,7 +53,7 @@ function currentVersion(path: string): number {
   }
 }
 
-function downgradeCurrentDatabase(path: string, version: 14 | 15): void {
+function downgradeCurrentDatabase(path: string, version: 14 | 15 | 16): void {
   const current = openDatabase(path);
   current.close();
 
@@ -61,6 +61,7 @@ function downgradeCurrentDatabase(path: string, version: 14 | 15): void {
   try {
     database.exec('DROP TABLE hospital_domain;');
     database.exec('DELETE FROM schema_migration WHERE version = 17;');
+    if (version === 16) return;
     database.exec('DELETE FROM schema_migration WHERE version = 16;');
     database.exec('ALTER TABLE schema_migration DROP COLUMN checksum;');
     if (version === 14) {
@@ -129,6 +130,84 @@ describe('SQLite 发布级硬化', () => {
       ).version,
     ).toBe(17);
     reopened.close();
+  });
+
+  it('checksum-bearing migration 16 库自动迁移到 17 并保留数据与可验证备份', () => {
+    directory = join(tmpdir(), `easy-hospital-migration-16-${process.pid}-${Date.now()}`);
+    const path = join(directory, 'data.sqlite3');
+    const sentinel = 'migration-16-sentinel';
+    downgradeCurrentDatabase(path, 16);
+
+    const version16 = new Database(path);
+    const migration16 = version16
+      .prepare('SELECT version, name, checksum FROM schema_migration WHERE version = 16')
+      .get();
+    version16
+      .prepare("UPDATE hospital SET name = ? WHERE id = 'hospital-pumch'")
+      .run(sentinel);
+    version16.close();
+    expect(migration16).toEqual({
+      version: 16,
+      name: 'migration-manifest-checksums',
+      checksum: '273e015a473cb5f11c1d82e6029f02997b89615f488cd6be89e0d53319118974',
+    });
+
+    const upgraded = openDatabase(path);
+    const schemaVersion = (
+      upgraded.prepare('SELECT MAX(version) AS version FROM schema_migration').get() as {
+        version: number;
+      }
+    ).version;
+    const migration17 = upgraded
+      .prepare('SELECT name, checksum FROM schema_migration WHERE version = 17')
+      .get();
+    const persistedSentinel = (
+      upgraded.prepare("SELECT name FROM hospital WHERE id = 'hospital-pumch'").get() as {
+        name: string;
+      }
+    ).name;
+    const domains = upgraded
+      .prepare(
+        'SELECT hospital_id, domain, kind FROM hospital_domain ORDER BY hospital_id, domain, kind',
+      )
+      .all();
+    upgraded.close();
+
+    expect(schemaVersion).toBe(17);
+    expect(persistedSentinel).toBe(sentinel);
+    expect(migration17).toEqual({
+      name: 'hospital-domain-policy',
+      checksum: '81ae9076e3d0813d6bdb183fb22387c776c51ec39154de695e616cb095679d2e',
+    });
+    expect(domains).toEqual([
+      { hospital_id: 'hospital-pumch', domain: 'pumch.cn', kind: 'evidence' },
+      { hospital_id: 'hospital-pumch', domain: 'pumch.cn', kind: 'official' },
+      { hospital_id: 'hospital-tongren', domain: 'bjtrhos.cn', kind: 'evidence' },
+      { hospital_id: 'hospital-tongren', domain: 'bjtrhos.cn', kind: 'official' },
+      { hospital_id: 'hospital-tongren', domain: 'news.bjd.com.cn', kind: 'evidence' },
+      { hospital_id: 'hospital-tongren', domain: 'trhos.com', kind: 'evidence' },
+      { hospital_id: 'hospital-tongren', domain: 'trhos.com', kind: 'official' },
+    ]);
+
+    const backups = listDatabaseBackups(path);
+    expect(backups).toHaveLength(1);
+    expect(backups[0].name).toMatch(
+      /^data\.sqlite3\.migration-v16-to-v17\.\d{8}T\d{9}Z(?:\.\d+)?\.sqlite3$/,
+    );
+    expect(verifyDatabaseBackup(backups[0].path)).toMatchObject({
+      path: backups[0].path,
+      integrity: 'ok',
+      schemaVersion: 16,
+    });
+    const backup = new Database(backups[0].path, { readonly: true, fileMustExist: true });
+    expect(
+      (
+        backup.prepare("SELECT name FROM hospital WHERE id = 'hospital-pumch'").get() as {
+          name: string;
+        }
+      ).name,
+    ).toBe(sentinel);
+    backup.close();
   });
 
   it('新建磁盘库和 :memory: 数据库不创建迁移备份', () => {
