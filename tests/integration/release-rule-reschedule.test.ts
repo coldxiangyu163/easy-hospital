@@ -12,6 +12,7 @@ import type {
 import { buildApp } from '../../src/server/app.js';
 import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
 import { SqliteJobRunner } from '../../src/storage/job-runner.js';
+import { recordDeliveryResult } from '../../src/storage/notification-outbox.js';
 
 // 规则重排 × 通知状态机交叉：改时间 / disable→enable / delete / 重试中 PATCH 非时刻字段，
 // 以及 worker 对规则不一致 job 的兜底校验。
@@ -52,6 +53,7 @@ describe('规则重排与提醒批次终态', () => {
       state: string;
       terminalReason: string | null;
       deliveries: Array<{
+        id: string;
         channel: string;
         state: string;
         attempts: number;
@@ -118,6 +120,95 @@ describe('规则重排与提醒批次终态', () => {
     const all = await batches();
     const newBatch = all.find((batch) => batch.id !== oldBatch.id)!;
     expect(newBatch).toMatchObject({ state: 'sent', terminalReason: null });
+  });
+
+  it('渠道 A 发送中 PATCH 规则后，未 claim 的渠道 B 不发送且 RULE_CHANGED 终态不被覆盖', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    let aCalls = 0;
+    let bCalls = 0;
+    let unblockA!: () => void;
+    let reportAStarted!: () => void;
+    const aBlocked = new Promise<void>((resolve) => {
+      unblockA = resolve;
+    });
+    const aStarted = new Promise<void>((resolve) => {
+      reportAStarted = resolve;
+    });
+    const channelA: NotificationChannel = {
+      key: 'race-a',
+      async send() {
+        aCalls += 1;
+        reportAStarted();
+        await aBlocked;
+        return { status: 'accepted', providerMessageId: 'a-ok' };
+      },
+    };
+    const channelB: NotificationChannel = {
+      key: 'race-b',
+      async send() {
+        bCalls += 1;
+        return { status: 'accepted', providerMessageId: 'b-ok' };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-rule-race-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    app = await buildApp({
+      databasePath,
+      notificationChannels: [channelA, channelB],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    await app.inject({ method: 'POST', url: '/api/watch-tasks', headers, payload: taskPayload });
+
+    now = firstReminderAt;
+    await aStarted;
+
+    let patchStatusCode: number | undefined;
+    let bCallsAfterPatch: number | undefined;
+    try {
+      now = firstReminderAt + 30_000;
+      const patch = await app.inject({
+        method: 'PATCH',
+        url: `/api/release-rules/${ruleId}`,
+        headers,
+        payload: { releaseTimeLocal: '16:00' },
+      });
+      patchStatusCode = patch.statusCode;
+      bCallsAfterPatch = bCalls;
+
+      const afterPatch = (await batches())[0]!;
+      const deliveryB = afterPatch.deliveries.find((delivery) => delivery.channel === 'race-b')!;
+      database = openDatabase(databasePath);
+      recordDeliveryResult(
+        database,
+        deliveryB.id,
+        { status: 'accepted', providerMessageId: 'stale-b-result' },
+        now,
+      );
+    } finally {
+      database?.close();
+      database = undefined;
+      unblockA();
+    }
+
+    expect(patchStatusCode).toBe(200);
+    expect(aCalls).toBe(1);
+    expect(bCallsAfterPatch).toBe(0);
+    await expect.poll(async () => (await batches())[0]?.state, { timeout: 1_000 }).toBe('failed');
+    const batch = (await batches())[0]!;
+    expect(batch.terminalReason).toBe('RULE_CHANGED');
+    expect(batch.deliveries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: 'race-a', state: 'sent', attempts: 1 }),
+        expect.objectContaining({
+          channel: 'race-b',
+          state: 'failed',
+          attempts: 0,
+          errorCode: 'RULE_CHANGED',
+        }),
+      ]),
+    );
+    expect(bCalls).toBe(0);
   });
 
   it('disable 后不再发送且已有批次转 RULE_CHANGED，enable 后恢复未来 occurrence', async () => {

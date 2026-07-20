@@ -515,12 +515,14 @@ export class LocalWorker {
 
       const channel = this.channels.get(delivery.channel);
       if (!channel) {
-        recordDeliveryResult(
-          this.database,
-          delivery.id,
-          { status: 'rejected', errorCode: 'NOTIFICATION_CHANNEL_NOT_FOUND', retryable: false },
-          now,
-        );
+        if (markDeliverySending(this.database, delivery.id, now)) {
+          recordDeliveryResult(
+            this.database,
+            delivery.id,
+            { status: 'rejected', errorCode: 'NOTIFICATION_CHANNEL_NOT_FOUND', retryable: false },
+            now,
+          );
+        }
         continue;
       }
 
@@ -532,7 +534,7 @@ export class LocalWorker {
         eventTags: ['schedule_released'],
         detectedAt: new Date(now).toISOString(),
       };
-      markDeliverySending(this.database, delivery.id, now);
+      if (!markDeliverySending(this.database, delivery.id, now)) continue;
       let result;
       try {
         result = await sendNotification(channel, message);
@@ -637,17 +639,22 @@ export class LocalWorker {
       const errorCode = delivery
         ? 'NOTIFICATION_CHANNEL_NOT_FOUND'
         : 'NOTIFICATION_CONTEXT_NOT_FOUND';
-      recordDeliveryResult(
-        this.database,
-        payload.deliveryId,
-        { status: 'rejected', errorCode, retryable: false },
-        now,
-      );
+      if (markDeliverySending(this.database, payload.deliveryId, now)) {
+        recordDeliveryResult(
+          this.database,
+          payload.deliveryId,
+          { status: 'rejected', errorCode, retryable: false },
+          now,
+        );
+      }
       this.runner.complete(job.id, now);
       return;
     }
 
-    markDeliverySending(this.database, payload.deliveryId, now);
+    if (!markDeliverySending(this.database, payload.deliveryId, now)) {
+      this.runner.complete(job.id, now);
+      return;
+    }
     let result;
     try {
       result = await sendNotification(channel, delivery.message);

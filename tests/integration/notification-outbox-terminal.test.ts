@@ -12,14 +12,19 @@ import type {
 } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
+import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
+import { SqliteJobRunner } from '../../src/storage/job-runner.js';
+import { prepareDueNotificationJobs } from '../../src/storage/notification-outbox.js';
 
 // 事件批次在无渠道或沉睡过久时必须进入诚实终态，而不是永久 collecting 或补发陈旧提醒。
 describe('事件批次诚实终态', () => {
   let app: FastifyInstance | undefined;
+  let database: SqliteDatabase | undefined;
   let directory: string | undefined;
 
   afterEach(async () => {
     await app?.close();
+    database?.close();
     if (directory) await rm(directory, { recursive: true, force: true });
   });
 
@@ -149,6 +154,62 @@ describe('事件批次诚实终态', () => {
     nowRef.now = observedAt + 24 * 3_600_000;
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect((await firstBatch()).state).toBe('failed');
+  });
+
+  it('已排队渠道在重启后缺失时，pending delivery 仍经 sending 收敛为诚实终态', async () => {
+    let sends = 0;
+    const removedChannel: NotificationChannel = {
+      key: 'removed-after-enqueue',
+      async send() {
+        sends += 1;
+        return { status: 'accepted', providerMessageId: 'must-not-send' };
+      },
+    };
+    const nowRef = { now: observedAt };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-removed-channel-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    app = await buildApp({
+      databasePath,
+      sourceAdapters: [makeAdapter()],
+      notificationChannels: [removedChannel],
+      workerPollMs: 60_000,
+      now: () => nowRef.now,
+    });
+    await createTaskAndFireEvents(nowRef);
+    await app.close();
+    app = undefined;
+
+    nowRef.now = observedAt + 61_000;
+    database = openDatabase(databasePath);
+    prepareDueNotificationJobs(
+      database,
+      new SqliteJobRunner(database),
+      [removedChannel.key],
+      nowRef.now,
+    );
+    database.close();
+    database = undefined;
+
+    app = await buildApp({
+      databasePath,
+      notificationChannels: [],
+      workerPollMs: 5,
+      now: () => nowRef.now,
+    });
+    await expect
+      .poll(async () => (await firstBatch()).state, { timeout: 1_000 })
+      .toBe('failed');
+    expect(await firstBatch()).toMatchObject({
+      state: 'failed',
+      deliveries: [
+        expect.objectContaining({
+          state: 'failed',
+          attempts: 1,
+          errorCode: 'NOTIFICATION_CHANNEL_NOT_FOUND',
+        }),
+      ],
+    });
+    expect(sends).toBe(0);
   });
 
   it('聚合窗口关闭超过 15 分钟仍未送达的事件转为 EVENT_NOTIFICATION_STALE，不补发', async () => {

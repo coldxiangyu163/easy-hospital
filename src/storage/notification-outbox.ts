@@ -661,20 +661,26 @@ function recomputeBatchState(database: SqliteDatabase, batchId: string, now: num
     .run(state, now, batchId);
 }
 
-export function markDeliverySending(database: SqliteDatabase, deliveryId: string, now: number): void {
-  database.transaction(() => {
+export function markDeliverySending(
+  database: SqliteDatabase,
+  deliveryId: string,
+  now: number,
+): boolean {
+  return database.transaction(() => {
     const delivery = database
       .prepare('SELECT batch_id FROM notification_delivery WHERE id = ?')
       .get(deliveryId) as { batch_id: string } | undefined;
-    if (!delivery) return;
-    database
+    if (!delivery) return false;
+    const updated = database
       .prepare(
         `UPDATE notification_delivery
          SET state = 'sending', attempts = attempts + 1, updated_at = ?
          WHERE id = ? AND state = 'pending'`,
       )
       .run(now, deliveryId);
+    if (updated.changes !== 1) return false;
     recomputeBatchState(database, delivery.batch_id, now);
+    return true;
   })();
 }
 
@@ -763,13 +769,13 @@ export function recordDeliveryResult(
       .prepare('SELECT batch_id FROM notification_delivery WHERE id = ?')
       .get(deliveryId) as { batch_id: string } | undefined;
     if (!delivery) return;
-    database
+    const updated = database
       .prepare(
         `UPDATE notification_delivery
          SET state = ?, provider_message_id = ?, last_error_code = ?, sent_at = ?, updated_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND state = 'sending'`,
       )
       .run(state, providerMessageId, errorCode, result.status === 'accepted' ? now : null, now, deliveryId);
-    recomputeBatchState(database, delivery.batch_id, now);
+    if (updated.changes === 1) recomputeBatchState(database, delivery.batch_id, now);
   })();
 }
