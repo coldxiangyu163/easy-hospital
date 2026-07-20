@@ -4,7 +4,7 @@ import '@testing-library/jest-dom/vitest';
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
 
@@ -42,9 +42,17 @@ const catalog = {
   ],
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe('创建关注任务', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-07-19T01:00:00.000Z'));
+  });
+
   it('先校验真实 catalog 表单，再通过 API 创建并进入任务详情', async () => {
     let createdTask: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
