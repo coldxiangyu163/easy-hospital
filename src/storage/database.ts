@@ -18,6 +18,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import {
+  acquireDatabaseLock,
+  DatabaseLockUnavailableError,
+} from './database-lock.js';
+
 export type SqliteDatabase = Database.Database;
 
 type MigrationDefinition = {
@@ -827,53 +832,67 @@ export function restoreDatabaseBackup(
   databasePath: string,
   backupPath: string,
 ): DatabaseRestoreResult {
-  const verified = verifyDatabaseBackup(backupPath);
   if (databasePath === ':memory:') throw new DatabaseRestoreError('内存数据库不支持恢复');
   if (resolve(databasePath) === resolve(backupPath)) {
     throw new DatabaseRestoreError('备份路径不能与当前数据库相同');
   }
   if (!existsSync(databasePath)) throw new DatabaseRestoreError('当前数据库不存在，无法恢复');
-  if (existsSync(`${databasePath}.lock`)) {
-    throw new DatabaseRestoreError('数据库仍在运行，停止应用后才能恢复');
+
+  let databaseLock;
+  try {
+    databaseLock = acquireDatabaseLock(databasePath);
+  } catch (error) {
+    if (error instanceof DatabaseLockUnavailableError) {
+      throw new DatabaseRestoreError('数据库仍在运行，停止应用后才能恢复', error);
+    }
+    throw error;
   }
 
-  const directory = dirname(databasePath);
-  const rollbackDirectory = join(directory, 'corrupt');
-  mkdirSync(rollbackDirectory, { recursive: true });
-  restrictPermissions(rollbackDirectory, 0o700);
-  const rollbackPath = uniquePath(
-    join(
-      rollbackDirectory,
-      `${basename(databasePath)}.rollback-${timestampForFilename()}.sqlite3`,
-    ),
-  );
-  const temporaryPath = join(directory, `.${basename(databasePath)}.restore-${randomUUID()}.tmp`);
-
   try {
-    copyFileSync(databasePath, rollbackPath, constants.COPYFILE_EXCL);
-    restrictPermissions(rollbackPath, 0o600);
-    for (const suffix of ['-wal', '-shm']) {
-      const sidecar = `${databasePath}${suffix}`;
-      if (existsSync(sidecar)) {
-        copyFileSync(sidecar, `${rollbackPath}${suffix}`, constants.COPYFILE_EXCL);
-        restrictPermissions(`${rollbackPath}${suffix}`, 0o600);
-      }
+    if (!existsSync(databasePath)) {
+      throw new DatabaseRestoreError('当前数据库不存在，无法恢复');
     }
+    const verified = verifyDatabaseBackup(backupPath);
+    const directory = dirname(databasePath);
+    const rollbackDirectory = join(directory, 'corrupt');
+    mkdirSync(rollbackDirectory, { recursive: true });
+    restrictPermissions(rollbackDirectory, 0o700);
+    const rollbackPath = uniquePath(
+      join(
+        rollbackDirectory,
+        `${basename(databasePath)}.rollback-${timestampForFilename()}.sqlite3`,
+      ),
+    );
+    const temporaryPath = join(directory, `.${basename(databasePath)}.restore-${randomUUID()}.tmp`);
 
-    copyFileSync(verified.path, temporaryPath, constants.COPYFILE_EXCL);
-    restrictPermissions(temporaryPath, 0o600);
-    fsyncFile(temporaryPath);
-    verifyDatabaseBackup(temporaryPath);
-    renameSync(temporaryPath, databasePath);
-    restrictPermissions(databasePath, 0o600);
-    rmSync(`${databasePath}-wal`, { force: true });
-    rmSync(`${databasePath}-shm`, { force: true });
-    fsyncDirectory(directory);
-    return { databasePath, backupPath: verified.path, rollbackPath };
-  } catch (error) {
-    rmSync(temporaryPath, { force: true });
-    if (error instanceof DatabaseRestoreError) throw error;
-    throw new DatabaseRestoreError('数据库恢复失败', error);
+    try {
+      copyFileSync(databasePath, rollbackPath, constants.COPYFILE_EXCL);
+      restrictPermissions(rollbackPath, 0o600);
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = `${databasePath}${suffix}`;
+        if (existsSync(sidecar)) {
+          copyFileSync(sidecar, `${rollbackPath}${suffix}`, constants.COPYFILE_EXCL);
+          restrictPermissions(`${rollbackPath}${suffix}`, 0o600);
+        }
+      }
+
+      copyFileSync(verified.path, temporaryPath, constants.COPYFILE_EXCL);
+      restrictPermissions(temporaryPath, 0o600);
+      fsyncFile(temporaryPath);
+      verifyDatabaseBackup(temporaryPath);
+      renameSync(temporaryPath, databasePath);
+      restrictPermissions(databasePath, 0o600);
+      rmSync(`${databasePath}-wal`, { force: true });
+      rmSync(`${databasePath}-shm`, { force: true });
+      fsyncDirectory(directory);
+      return { databasePath, backupPath: verified.path, rollbackPath };
+    } catch (error) {
+      rmSync(temporaryPath, { force: true });
+      if (error instanceof DatabaseRestoreError) throw error;
+      throw new DatabaseRestoreError('数据库恢复失败', error);
+    }
+  } finally {
+    databaseLock.release();
   }
 }
 

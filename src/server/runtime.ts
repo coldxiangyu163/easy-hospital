@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 
@@ -9,6 +9,11 @@ import { createSmtpChannelFromEnv } from '../adapters/notifications/smtp.js';
 import { createPumchDermatologyScheduleAdapter } from '../adapters/sources/pumch.js';
 import { loadRuntimeConfig } from '../core/config.js';
 import type { NotificationChannel } from '../core/notification-channel.js';
+import {
+  acquireDatabaseLock,
+  type DatabaseLock,
+  DatabaseLockUnavailableError,
+} from '../storage/database-lock.js';
 import {
   buildApp,
   type BuildAppOptions,
@@ -32,58 +37,6 @@ export async function restrictPathPermissions(path: string, mode: number): Promi
   } catch {
     return false;
   }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH') return false;
-    return true;
-  }
-}
-
-async function acquireInstanceLock(lockPath: string): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await mkdir(lockPath, { recursive: false });
-      try {
-        await writeFile(
-          `${lockPath}/owner.json`,
-          JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
-          { flag: 'wx' },
-        );
-        return;
-      } catch (error) {
-        await rm(lockPath, { recursive: true, force: true });
-        throw error;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-
-      let ownerPid: number | undefined;
-      try {
-        const owner = JSON.parse(await readFile(`${lockPath}/owner.json`, 'utf8')) as {
-          pid?: unknown;
-        };
-        if (Number.isInteger(owner.pid) && Number(owner.pid) > 0) {
-          ownerPid = Number(owner.pid);
-        }
-      } catch {
-        // 创建者可能仍在写 owner；缺失或损坏时 fail closed。
-      }
-
-      if (ownerPid === undefined || isProcessAlive(ownerPid)) {
-        throw new Error('数据目录已有 easy-hospital 实例运行', { cause: error });
-      }
-
-      await rm(lockPath, { recursive: true, force: true });
-    }
-  }
-
-  throw new Error('无法安全获取 easy-hospital 数据目录锁');
 }
 
 export async function startApplicationFromEnvironment(
@@ -138,8 +91,17 @@ export async function startApplication(
     throw new Error('RADAR_PORT 必须是有效端口');
   }
 
-  const lockPath = options.databasePath ? `${options.databasePath}.lock` : undefined;
-  if (lockPath) await acquireInstanceLock(lockPath);
+  let databaseLock: DatabaseLock | undefined;
+  if (options.databasePath) {
+    try {
+      databaseLock = acquireDatabaseLock(options.databasePath);
+    } catch (error) {
+      if (error instanceof DatabaseLockUnavailableError) {
+        throw new Error('数据目录已有 easy-hospital 实例运行', { cause: error });
+      }
+      throw error;
+    }
+  }
 
   try {
     const app = await buildApp(options);
@@ -155,12 +117,12 @@ export async function startApplication(
         try {
           await app.close();
         } finally {
-          if (lockPath) await rm(lockPath, { recursive: true, force: true });
+          databaseLock?.release();
         }
       },
     };
   } catch (error) {
-    if (lockPath) await rm(lockPath, { recursive: true, force: true });
+    databaseLock?.release();
     throw error;
   }
 }

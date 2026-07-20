@@ -234,6 +234,69 @@ describe('SQLite 发布级硬化', () => {
     expect(currentVersion(path)).toBe(17);
   });
 
+  it('dead PID 遗留锁可安全回收，restore 成功后释放实例锁', () => {
+    directory = join(tmpdir(), `easy-hospital-restore-stale-lock-${process.pid}-${Date.now()}`);
+    const path = join(directory, 'data.sqlite3');
+    downgradeCurrentDatabase(path, 15);
+    const current = openDatabase(path);
+    current.prepare("UPDATE hospital SET name = '恢复前改动' WHERE id = 'hospital-pumch'").run();
+    current.close();
+    const [backup] = listDatabaseBackups(path);
+    const lockPath = `${path}.lock`;
+    mkdirSync(lockPath);
+    writeFileSync(
+      join(lockPath, 'owner.json'),
+      JSON.stringify({ pid: 2_147_483_647, startedAt: '2026-07-19T00:00:00.000Z' }),
+    );
+
+    restoreDatabaseBackup(path, backup.path);
+
+    expect(existsSync(lockPath)).toBe(false);
+    const restored = new Database(path, { readonly: true, fileMustExist: true });
+    expect(
+      (
+        restored.prepare("SELECT name FROM hospital WHERE id = 'hospital-pumch'").get() as {
+          name: string;
+        }
+      ).name,
+    ).toBe('北京协和医院');
+    restored.close();
+  });
+
+  it.each([
+    [
+      'live PID',
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
+    ],
+    ['缺失 owner', undefined],
+    ['malformed owner', '{"pid":'],
+  ] as const)('%s 锁使 restore fail closed 且不修改主库', (_case, owner) => {
+    directory = join(tmpdir(), `easy-hospital-restore-locked-${process.pid}-${Date.now()}`);
+    const path = join(directory, 'data.sqlite3');
+    downgradeCurrentDatabase(path, 15);
+    const current = openDatabase(path);
+    current.prepare("UPDATE hospital SET name = '不可修改' WHERE id = 'hospital-pumch'").run();
+    current.close();
+    const [backup] = listDatabaseBackups(path);
+    const before = readFileSync(path);
+    const lockPath = `${path}.lock`;
+    mkdirSync(lockPath);
+    if (owner !== undefined) writeFileSync(join(lockPath, 'owner.json'), owner);
+
+    expect(() => restoreDatabaseBackup(path, backup.path)).toThrowError(
+      '数据库仍在运行，停止应用后才能恢复',
+    );
+
+    expect(readFileSync(path)).toEqual(before);
+    expect(existsSync(lockPath)).toBe(true);
+    if (owner === undefined) {
+      expect(existsSync(join(lockPath, 'owner.json'))).toBe(false);
+    } else {
+      expect(readFileSync(join(lockPath, 'owner.json'), 'utf8')).toBe(owner);
+    }
+    expect(existsSync(join(directory, 'corrupt'))).toBe(false);
+  });
+
   it('有效备份可显式恢复损坏主库，并保留损坏 rollback 原件', () => {
     directory = join(tmpdir(), `easy-hospital-restore-corrupt-${process.pid}-${Date.now()}`);
     const path = join(directory, 'data.sqlite3');
