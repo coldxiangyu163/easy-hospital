@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-20
+
+### 修复
+
+- 长时间监测空窗后，只有距上次来源尝试超过该来源有效最小间隔的 2 倍才删除监测基线并静默重建；协和当前最小间隔为 2 小时，因此 grace 为 4 小时。恢复不会把离线差异误报为新排班。
+- 通知投递使用原子 `sending` claim，只有成功 claim 的渠道可以发送并回写结果；规则变更产生的批次终态不会再被并发发送覆盖。
+- 放号前规则提醒以放号时刻 `occurrenceAt` 为重试截止时间：截止前保留 1/5/15 分钟阶梯，截止后不再发送；从未尝试记为 `RELEASE_REMINDER_MISSED`，已有失败尝试记为 `RELEASE_REMINDER_RETRY_EXPIRED`。
+- 规则新增、编辑、停用和删除后按医院/院区/科室 scope 立即 reconciliation，唯一首选规则接管未来提醒；旧批次以 `RULE_CHANGED` 或 `RULE_DELETED` 结束，已发送渠道记录保留。
+- 应用启动与人工数据库恢复共用同一原子实例锁；可安全回收已退出进程的 stale lock，不能确认所有权时 fail closed。
+
+### 数据与安全
+
+- 新增 migration 17 `hospital-domain-policy`，以 `hospital_domain` 表统一维护 `official` 与 `evidence` 域：预约入口只接受 `official` kind，证据来源只接受 `evidence` kind；同一官方域可分别登记两种 kind，未登记范围拒绝写入。
+- 打开现有数据库时继续执行完整性检查、migration checksum 校验和迁移前一致性备份；数据目录、数据库、WAL/SHM、迁移备份与生产 `.env` 在支持 POSIX 权限的平台收紧为当前用户访问。
+- 带 `Origin` 的普通写请求必须同时来自 loopback Web Origin 并携带 `x-easy-hospital-client: web`；5xx 响应脱敏，目录引用和来源政策在写入前校验。
+
+### 界面与契约
+
+- 新建或重新启用任务的日期限制统一为北京时间今天至今天加 14 天；客户端日期边界与服务端校验一致。
+- 同仁鼻科 C 级任务统一为规则提醒：客户端忽略医生、职称和时段并只提交 `schedule_released`，API 对不符合该规范的创建或编辑返回 `SOURCE_POLICY_VIOLATION`，不会把 C 级文案写成实时排班或号源状态。
+- 任务编辑保留已有事件类型与提醒分钟；来源页区分最后成功和最后失败；补齐 skip link、对比度、对话框 inert 与焦点恢复。
+
+### 能力边界
+
+- 稳定承诺不变：协和皮肤科只识别官方公开页面中的 `schedule_released`；同仁崇文门鼻科只提供 C 级规则提醒。
+- `availability_changed_to_available`、`cancellation_slot_detected` 和 Browser Agent 仍是实验性能力；本版本不宣称实时余号、退号现场闭环、自动预约或离线持续监测。
+
 ## [0.1.0] - 2026-07-19
 
 ### 新增

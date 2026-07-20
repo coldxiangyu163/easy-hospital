@@ -90,7 +90,7 @@ RADAR_DATA_DIR=/Users/your-account/Library/Application Support/easy-hospital
 
 路径中的账户名属于本机信息，不要粘贴到公开 Issue。诊断信息应在分享前移除用户目录部分。
 
-应用使用 `better-sqlite3`。数据库写入采用短事务，网络请求和 Playwright 操作不能占用写事务。SQLite、WAL、SHM、备份和锁文件均属于运行数据，不得提交 Git。
+应用使用 `better-sqlite3`。数据库写入采用短事务，网络请求和 Playwright 操作不能占用写事务。SQLite、WAL、SHM、备份和锁文件均属于运行数据，不得提交 Git。在支持 POSIX 权限位的平台，应用会把数据目录与备份/rollback 目录收紧为 `0700`，把数据库、WAL/SHM、迁移备份、恢复临时文件和 rollback 文件收紧为 `0600`；不支持 POSIX 权限位的平台会保留平台原生 ACL 行为。
 
 ### 时区
 
@@ -99,6 +99,16 @@ RADAR_TIMEZONE=Asia/Shanghai
 ```
 
 放号时间、就诊日期、监测窗口和通知都按北京时间解释。修改为其他时区会造成提醒偏移，稳定版应拒绝启动，而不是静默换算。
+
+### 本机 HTTP 与任务契约
+
+管理端仍是本机 Web 应用，不是可暴露到公网的通用 API：
+
+- 带 `Origin` 的普通 `POST`、`PATCH`、`DELETE` 等写请求，`Origin` 必须是 loopback Web Origin，并必须携带 `x-easy-hospital-client: web`。缺失或取值错误返回 `403 CLIENT_HEADER_REQUIRED`；跨站 Origin 返回 `403 LOCAL_ORIGIN_REQUIRED`。
+- 无 `Origin` 的本机 CLI 请求保留给 `curl` 等非浏览器客户端，但仍受 loopback Host、输入 schema、catalog 和来源政策校验；这不代表可以通过反向代理暴露服务。
+- Browser Agent observation 使用独立的 `chrome-extension://` Origin、nonce/HMAC 和 Bearer 配对契约，不使用 `x-easy-hospital-client: web` 代替扩展认证。
+- 创建任务，以及修改日期或重新启用任务时，`dateFrom`/`dateTo` 必须落在**北京时间今天到今天加 14 天（含两端）**；非法范围返回 `400 VALIDATION_ERROR`。
+- 同仁崇文门鼻科是 C 级规则提醒。管理端提交前会规范化为 `matchMode=any_expert`、`doctorName=null`、空职称、`session=ANY`、仅 `schedule_released`，并要求非空的 `remindBeforeMinutes`。API 不会替第三方调用者静默改写：创建或编辑结果不符合上述规范时返回 `400 SOURCE_POLICY_VIOLATION`。
 
 ### 测试与 CI 来源隔离
 
@@ -195,7 +205,7 @@ SMTP_SECURE=false
 
 保护要求：
 
-- `.env` 权限只给当前用户。
+- `.env` 权限只给当前用户；生产启动在支持 POSIX 权限位的平台会尝试收紧为 `0600`。
 - 不在 shell 历史中直接导出秘密。
 - 不把 `.env`、数据目录或备份放入仓库。
 - 不在公开 Issue 中粘贴完整环境变量或诊断包。
@@ -242,8 +252,8 @@ npm start
 打开已有磁盘数据库时，应用按以下顺序执行：
 
 1. 在任何 migration 前运行 SQLite `integrity_check`。失败时抛出稳定错误“数据库完整性检查失败，原数据库未被修改”，关闭连接并保留原文件，不创建替代库，也不自动恢复。
-2. 验证全部已应用 migration 的连续 version、固定 name 和 SHA-256 checksum。migration 16 为 1–15 建立 checksum 基线；之后历史 migration SQL 被改写，或 `schema_migration` 的 name/checksum 被篡改，都会 fail closed。
-3. 若已有磁盘库存在 pending migration，使用同步 `VACUUM INTO` 在 `<RADAR_DATA_DIR>/backups/` 创建迁移前一致性备份，重新以只读方式打开备份并通过 `integrity_check` 与 migration manifest 验证后才迁移。
+2. 验证全部已应用 migration 的连续 version、固定 name 和 SHA-256 checksum。migration 16 为 1–15 建立 checksum 基线，migration 17 `hospital-domain-policy` 新增 `hospital_domain` 作为域政策单一事实源：`officialEntryUrl` 只允许该医院登记的 `official` kind，`sourceUrl` 只允许登记的 `evidence` kind；同一官方域如也作为证据来源，会分别登记两种 kind。未登记域的医院或 URL fail closed。之后历史 migration SQL 被改写，或 `schema_migration` 的 name/checksum 被篡改，都会 fail closed。
+3. 若已有磁盘库存在 pending migration，使用同步 `VACUUM INTO` 在 `<RADAR_DATA_DIR>/backups/` 创建迁移前一致性备份，重新以只读方式打开备份并通过 `integrity_check` 与 migration manifest 验证后才迁移。v0.1.1 候选至少演练一次 v16 → v17 的备份、迁移、重启与恢复。
 4. 所有 pending migration 在同一事务中执行，完成后再次运行 `integrity_check`。
 
 新建数据库和 `:memory:` 数据库不创建迁移备份。自动迁移备份按修改时间只保留最近 5 份；它们是升级保护，不代替独立的长期停机备份。
@@ -284,7 +294,7 @@ NODE
 
 ### 显式恢复
 
-恢复不会自动发生，必须由用户在应用完全停止后明确调用。helper 会先验证备份；验证失败时不会创建 rollback，也不会修改主库。验证成功后，它会：
+恢复不会自动发生，必须由用户在应用完全停止后明确调用。`restoreDatabaseBackup` 会先获取与生产启动相同的 `<database>.lock` 原子实例锁：运行中的实例会让恢复 fail closed；已退出进程留下且所有权可确认的 stale lock 可安全回收；锁内容损坏或所有权无法确认时拒绝恢复。helper 获锁后才验证备份；验证失败时不会创建 rollback，也不会修改主库，并在结束时释放自己持有的锁。验证成功后，它会：
 
 1. 把当前主库及现存 WAL/SHM 保存到 `<RADAR_DATA_DIR>/corrupt/` 的时间戳 rollback 副本；
 2. 把已验证备份复制到主库同目录的临时文件并再次验证、同步落盘；
@@ -295,7 +305,7 @@ NODE
 
 ```bash
 DATABASE_PATH='/absolute/path/to/data.sqlite3' \
-BACKUP_PATH='/absolute/path/to/backups/data.sqlite3.migration-v15-to-v16.TIMESTAMP.sqlite3' \
+BACKUP_PATH='/absolute/path/to/backups/data.sqlite3.migration-v16-to-v17.TIMESTAMP.sqlite3' \
 node --input-type=module <<'NODE'
 import { restoreDatabaseBackup } from './dist/server/storage/database.js';
 

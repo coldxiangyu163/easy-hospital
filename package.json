@@ -1,6 +1,6 @@
 {
   "name": "beijing-appointment-radar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "本地优先的北京医院放号规则与号源变化提醒工具",
   "directories": {
     "doc": "docs"
