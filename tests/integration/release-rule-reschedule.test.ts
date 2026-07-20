@@ -260,7 +260,7 @@ describe('规则重排与提醒批次终态', () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(bCalls).toBe(1); // 不再重试
 
-    // enable：无需重启即按当前规则重排（今天 occurrence 已过 → 排明天 07-20 的）
+    // 当前 occurrence 已有发送批次，enable 后不重复发送，改排下个 occurrence。
     const enable = await app.inject({
       method: 'PATCH',
       url: `/api/release-rules/${ruleId}`,
@@ -362,6 +362,93 @@ describe('规则重排与提醒批次终态', () => {
     expect(aCalls).toBe(1);
     expect((await batches())[0]).toMatchObject({ state: 'sent' });
     expect(bMessages[1]!.text).toContain('规则最后核验日期：2026-07-20');
+  });
+
+  it('running 旧主规则因停用终止后补排备用规则，旧规则 0 发送', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    const messages: NotificationMessage[] = [];
+    const capture: NotificationChannel = {
+      key: 'running-fallback-capture',
+      async send(message) {
+        messages.push(message);
+        return { status: 'accepted', providerMessageId: 'fallback-ok' };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-rule-running-fallback-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const options = {
+      databasePath,
+      notificationChannels: [capture],
+      workerPollMs: 60_000,
+      now: () => now,
+    };
+    app = await buildApp(options);
+    const task = (
+      await app.inject({ method: 'POST', url: '/api/watch-tasks', headers, payload: taskPayload })
+    ).json();
+    const backup = await app.inject({
+      method: 'POST',
+      url: '/api/release-rules',
+      headers,
+      payload: {
+        hospitalId: taskPayload.hospitalId,
+        campusId: taskPayload.campusId,
+        departmentId: taskPayload.departmentId,
+        advanceDays: 7,
+        releaseTimeLocal: '16:00',
+        sameDayPolicy: '以官方页面为准',
+        officialEntryUrl: 'https://www.bjtrhos.cn/Html/News/Articles/7104.html',
+        sourceUrl: 'https://news.bjd.com.cn/2024/07/02/10822953.shtml',
+        verifiedAt: '2026-07-19T01:00:00.000Z',
+        confidence: 'low',
+        needsReconfirmation: true,
+      },
+    });
+    expect(backup.statusCode).toBe(201);
+    const backupRuleId = backup.json().id as string;
+
+    now = firstReminderAt;
+    database = openDatabase(databasePath);
+    const running = new SqliteJobRunner(database).claimNext({ now, leaseMs: 30_000 });
+    expect(running).toMatchObject({
+      type: 'release-reminder',
+      state: 'running',
+      payload: { taskId: task.id, ruleId },
+    });
+
+    const disabled = await app.inject({
+      method: 'PATCH',
+      url: `/api/release-rules/${ruleId}`,
+      headers,
+      payload: { enabled: false },
+    });
+    expect(disabled.statusCode).toBe(200);
+    database.close();
+    database = undefined;
+    await app.close();
+    app = undefined;
+
+    now = firstReminderAt + 31_000;
+    app = await buildApp({ ...options, workerPollMs: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(messages).toHaveLength(0);
+
+    const inspector = openDatabase(databasePath);
+    const fallback = inspector
+      .prepare(
+        "SELECT state, payload_json FROM job WHERE type = 'release-reminder' AND state = 'pending' ORDER BY run_at LIMIT 1",
+      )
+      .get() as { state: string; payload_json: string } | undefined;
+    inspector.close();
+    expect(fallback?.state).toBe('pending');
+    expect(JSON.parse(fallback!.payload_json)).toMatchObject({
+      taskId: task.id,
+      ruleId: backupRuleId,
+    });
+
+    now = Date.parse('2026-07-19T07:55:00.000Z');
+    await expect.poll(() => messages.length, { timeout: 1_000 }).toBe(1);
+    expect(messages[0]!.text).toContain('预计 16:00 放号');
   });
 
   it('规则变更后漏网旧 job 被 worker 校验拦截：0 发送、RULE_CHANGED 终态', async () => {

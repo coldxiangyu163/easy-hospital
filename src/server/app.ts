@@ -42,8 +42,7 @@ import {
   recordNotificationSelfTest,
 } from '../storage/notification-self-test.js';
 import {
-  cancelPendingReleaseReminderJobs,
-  rescheduleReleaseRemindersForRule,
+  reconcileReleaseReminderScopes,
   scheduleWatchTask,
 } from '../storage/scheduling.js';
 import {
@@ -526,7 +525,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return reply.code(400).send({ error: 'UNOFFICIAL_URL' });
     }
 
-    return reply.code(201).send(createReleaseRule(database, parsed.data));
+    const created = createReleaseRule(database, parsed.data);
+    reconcileReleaseReminderScopes(
+      database,
+      jobRunner,
+      sourceAdapters,
+      [created],
+      now(),
+    );
+    return reply.code(201).send(created);
   });
 
   app.get('/api/release-rules', async () => ({ rules: listReleaseRules(database) }));
@@ -557,19 +564,32 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     );
     const updated = updateReleaseRule(database, id, parsed.data)!;
     if (rescheduleNeeded) {
-      // 取消旧时刻的 pending 提醒（含已有批次的终态落地）并按更新后的规则立即重排
-      // （disable→enable 无需重启恢复）；非时刻字段更新不动调度。
-      rescheduleReleaseRemindersForRule(database, jobRunner, sourceAdapters, updated, now());
+      reconcileReleaseReminderScopes(
+        database,
+        jobRunner,
+        sourceAdapters,
+        [current, updated],
+        now(),
+        [{ id, reason: 'RULE_CHANGED' }],
+      );
     }
     return updated;
   });
 
   app.delete('/api/release-rules/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!deleteReleaseRule(database, id)) {
+    const current = getReleaseRule(database, id);
+    if (!current || !deleteReleaseRule(database, id)) {
       return reply.code(404).send({ error: 'RELEASE_RULE_NOT_FOUND' });
     }
-    cancelPendingReleaseReminderJobs(database, id, 'RULE_DELETED', now());
+    reconcileReleaseReminderScopes(
+      database,
+      jobRunner,
+      sourceAdapters,
+      [current],
+      now(),
+      [{ id, reason: 'RULE_DELETED' }],
+    );
     return reply.code(204).send();
   });
 

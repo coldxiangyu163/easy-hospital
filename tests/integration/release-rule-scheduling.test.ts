@@ -73,16 +73,56 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
     return databasePath;
   }
 
-  async function createTask() {
+  async function createTask(payload = taskPayload) {
     const response = await app!.inject({
       method: 'POST',
       url: '/api/watch-tasks',
       headers: { host: '127.0.0.1' },
-      payload: taskPayload,
+      payload,
     });
     expect(response.statusCode).toBe(201);
     return response.json() as { id: string };
   }
+
+  async function createRule(releaseTimeLocal = '16:00') {
+    const response = await app!.inject({
+      method: 'POST',
+      url: '/api/release-rules',
+      headers: { host: '127.0.0.1' },
+      payload: {
+        hospitalId: 'hospital-tongren',
+        campusId: 'campus-tongren-chongwenmen',
+        departmentId: 'department-tongren-rhinology',
+        advanceDays: 7,
+        releaseTimeLocal,
+        sameDayPolicy: '以官方页面为准',
+        officialEntryUrl: 'https://www.bjtrhos.cn/Html/News/Articles/7104.html',
+        sourceUrl: 'https://news.bjd.com.cn/2024/07/02/10822953.shtml',
+        verifiedAt: '2026-07-19T01:00:00.000Z',
+        confidence: 'low',
+        needsReconfirmation: true,
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json() as { id: string };
+  }
+
+  it('POST 第一条同 scope 规则后立即为既有任务安排 reminder', async () => {
+    const databasePath = await startApp();
+    const deleted = await app!.inject({
+      method: 'DELETE',
+      url: `/api/release-rules/${RULE_ID}`,
+      headers: { host: '127.0.0.1' },
+    });
+    expect(deleted.statusCode).toBe(204);
+    const task = await createTask();
+    expect(listReminderJobs(databasePath)).toHaveLength(0);
+
+    const rule = await createRule();
+    const pending = listReminderJobs(databasePath).filter((job) => job.state === 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].payload).toMatchObject({ taskId: task.id, ruleId: rule.id });
+  });
 
   it('PATCH 改放号时间：旧时刻 pending job 被取消，新时刻立即产生新 job', async () => {
     const databasePath = await startApp();
@@ -150,7 +190,64 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
     );
   });
 
-  it('DELETE 规则取消其全部 pending 提醒 job', async () => {
+  it('DELETE 主规则后同 scope enabled 备用规则立即接管', async () => {
+    const databasePath = await startApp();
+    const task = await createTask();
+    const backup = await createRule('16:00');
+    expect(listReminderJobs(databasePath)[0]?.payload.ruleId).toBe(RULE_ID);
+
+    const deleted = await app!.inject({
+      method: 'DELETE',
+      url: `/api/release-rules/${RULE_ID}`,
+      headers: { host: '127.0.0.1' },
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    const pending = listReminderJobs(databasePath).filter((job) => job.state === 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].payload).toMatchObject({ taskId: task.id, ruleId: backup.id });
+    expect(new Date(pending[0].payload.occurrenceAt).toISOString()).toBe(
+      '2026-07-19T08:00:00.000Z',
+    );
+  });
+
+  it('PATCH 移动 scope 后旧 scope 由备用规则接管且新 scope 由移动规则接管', async () => {
+    const databasePath = await startApp();
+    const oldTask = await createTask();
+    const backup = await createRule('16:00');
+
+    const catalog = new Database(databasePath);
+    try {
+      catalog
+        .prepare("INSERT INTO campus (id, hospital_id, name) VALUES ('campus-tongren-test', 'hospital-tongren', '测试院区')")
+        .run();
+      catalog
+        .prepare("UPDATE department SET campus_id = 'campus-tongren-test' WHERE id = 'department-tongren-rhinology'")
+        .run();
+    } finally {
+      catalog.close();
+    }
+    const newTask = await createTask({ ...taskPayload, campusId: 'campus-tongren-test' });
+
+    const patched = await app!.inject({
+      method: 'PATCH',
+      url: `/api/release-rules/${RULE_ID}`,
+      headers: { host: '127.0.0.1' },
+      payload: { campusId: 'campus-tongren-test' },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const pending = listReminderJobs(databasePath).filter((job) => job.state === 'pending');
+    expect(pending).toHaveLength(2);
+    expect(pending).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ payload: expect.objectContaining({ taskId: oldTask.id, ruleId: backup.id }) }),
+        expect.objectContaining({ payload: expect.objectContaining({ taskId: newTask.id, ruleId: RULE_ID }) }),
+      ]),
+    );
+  });
+
+  it('DELETE 唯一规则取消其全部 pending 提醒 job', async () => {
     const databasePath = await startApp();
     await createTask();
     expect(
@@ -177,26 +274,7 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
     expect(seedJob.state).toBe('pending');
 
     // 第二条同 scope 规则（18:00），域组合合法
-    const created = await app!.inject({
-      method: 'POST',
-      url: '/api/release-rules',
-      headers: { host: '127.0.0.1' },
-      payload: {
-        hospitalId: 'hospital-tongren',
-        campusId: 'campus-tongren-chongwenmen',
-        departmentId: 'department-tongren-rhinology',
-        advanceDays: 7,
-        releaseTimeLocal: '18:00',
-        sameDayPolicy: '以官方页面为准',
-        officialEntryUrl: 'https://www.bjtrhos.cn/Html/News/Articles/7104.html',
-        sourceUrl: 'https://news.bjd.com.cn/2024/07/02/10822953.shtml',
-        verifiedAt: '2026-07-19T01:00:00.000Z',
-        confidence: 'low',
-        needsReconfirmation: true,
-      },
-    });
-    expect(created.statusCode).toBe(201);
-    const secondRuleId = created.json().id as string;
+    const secondRuleId = (await createRule('18:00')).id;
 
     const patched = await app!.inject({
       method: 'PATCH',

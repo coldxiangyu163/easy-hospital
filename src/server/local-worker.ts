@@ -24,6 +24,7 @@ import {
 import { getReleaseRule } from '../storage/release-rules.js';
 import {
   createSourceScopeKey,
+  getEnabledReleaseRuleForScope,
   releaseRuleMatchesOccurrence,
   scheduleWatchTask,
 } from '../storage/scheduling.js';
@@ -360,8 +361,6 @@ export class LocalWorker {
       !task ||
       !task.enabled ||
       task.version !== payload.taskVersion ||
-      !rule ||
-      !rule.enabled ||
       !payload.occurrenceAt ||
       !payload.targetDate ||
       !payload.officialEntryUrl
@@ -369,13 +368,65 @@ export class LocalWorker {
       this.runner.complete(job.id, now);
       return;
     }
-    // 错过判定必须使用不可变的计划提醒时刻：job.runAt 会被重试退避和
-    // LEASE_EXPIRED 恢复改写，不能作为基准。旧 payload 缺少 reminderAt 时
+    const selectedRule = getEnabledReleaseRuleForScope(this.database, task);
+    if (!rule || !rule.enabled || selectedRule?.id !== rule.id) {
+      this.runner.complete(job.id, now);
+      scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now + 1);
+      return;
+    }
+    // reminderAt 是不可变的首次计划时刻：job.runAt 会被重试退避和
+    // LEASE_EXPIRED 恢复改写，不能作为批次起点。旧 payload 缺少 reminderAt 时
     // 用 occurrenceAt 与任务当时的 remindBeforeMinutes（version 已校验）推导。
     const scheduledReminderAt =
       typeof payload.reminderAt === 'number'
         ? payload.reminderAt
         : payload.occurrenceAt - (task.remindBeforeMinutes ?? 0) * 60_000;
+    const channelKeys = [...this.channels.keys()];
+    const reminderBatchInput = {
+      taskId: task.id,
+      taskVersion: task.version,
+      ruleId: rule.id,
+      reminderAt: scheduledReminderAt,
+      occurrenceAt: payload.occurrenceAt,
+      targetDate: payload.targetDate,
+      officialEntryUrl: payload.officialEntryUrl,
+      needsReconfirmation: rule.needsReconfirmation,
+      channelKeys,
+    };
+    const finishExpiredReminder = (
+      reason: 'RELEASE_REMINDER_MISSED' | 'RELEASE_REMINDER_RETRY_EXPIRED',
+      expiredAt: number,
+    ): void => {
+      if (reason === 'RELEASE_REMINDER_RETRY_EXPIRED') {
+        const batch = ensureReleaseReminderBatch(
+          this.database,
+          reminderBatchInput,
+          expiredAt,
+        );
+        // 已尝试 delivery 先保留最后渠道错误并转 failed；随后 ensure 只会给
+        // 从未尝试的 pending delivery 写入统一 deadline 原因。
+        this.database
+          .prepare(
+            `UPDATE notification_delivery
+             SET state = 'failed', updated_at = ?
+             WHERE batch_id = ? AND state = 'pending' AND attempts > 0`,
+          )
+          .run(expiredAt, batch.id);
+      }
+      ensureReleaseReminderBatch(
+        this.database,
+        { ...reminderBatchInput, terminalReason: reason },
+        expiredAt,
+      );
+      this.runner.complete(job.id, expiredAt);
+      scheduleWatchTask(
+        this.database,
+        this.runner,
+        task,
+        this.sourceAdapters,
+        expiredAt + 1,
+      );
+    };
     // 规则一致性校验：payload 快照与当前 rule 计算出的 occurrence/官方入口不一致时，
     // 该 job 基于的是旧规则——0 发送、已有批次转终态、按当前规则重排。
     if (
@@ -405,34 +456,36 @@ export class LocalWorker {
       scheduleWatchTask(this.database, this.runner, task, this.sourceAdapters, now + 1);
       return;
     }
-    if (now - scheduledReminderAt > 300_000) {
-      ensureReleaseReminderBatch(
-        this.database,
-        {
-          taskId: task.id,
-          taskVersion: task.version,
-          ruleId: rule.id,
-          reminderAt: scheduledReminderAt,
-          occurrenceAt: payload.occurrenceAt,
-          targetDate: payload.targetDate,
-          officialEntryUrl: payload.officialEntryUrl,
-          needsReconfirmation: rule.needsReconfirmation,
-          channelKeys: [...this.channels.keys()],
-          terminalReason: 'RELEASE_REMINDER_MISSED',
-        },
-        now,
+    if (now > payload.occurrenceAt) {
+      const hadChannelAttempt = Boolean(
+        this.database
+          .prepare(
+            `SELECT 1
+             FROM notification_batch nb
+             JOIN notification_delivery nd ON nd.batch_id = nb.id
+             WHERE nb.task_id = ?
+               AND nb.official_entry_url = ?
+               AND json_extract(nb.event_ids_json, '$.kind') = 'release-reminder'
+               AND json_extract(nb.event_ids_json, '$.occurrenceAt') = ?
+               AND json_extract(nb.event_ids_json, '$.targetDate') = ?
+               AND nd.attempts > 0
+             LIMIT 1`,
+          )
+          .get(
+            task.id,
+            payload.officialEntryUrl,
+            payload.occurrenceAt,
+            payload.targetDate,
+          ),
       );
-      this.runner.complete(job.id, now);
-      scheduleWatchTask(
-        this.database,
-        this.runner,
-        task,
-        this.sourceAdapters,
-        now + 1,
+      finishExpiredReminder(
+        hadChannelAttempt
+          ? 'RELEASE_REMINDER_RETRY_EXPIRED'
+          : 'RELEASE_REMINDER_MISSED',
+        now,
       );
       return;
     }
-    const channelKeys = [...this.channels.keys()];
     if (channelKeys.length === 0) {
       ensureReleaseReminderBatch(
         this.database,
@@ -563,10 +616,15 @@ export class LocalWorker {
     if (retryableError) {
       const retryDelays = [60_000, 5 * 60_000, 15 * 60_000];
       const retryDelay = retryDelays[job.attempts - 1] ?? 15 * 60_000;
+      const retryNow = this.now();
+      if (now === payload.occurrenceAt || retryNow > payload.occurrenceAt) {
+        finishExpiredReminder('RELEASE_REMINDER_RETRY_EXPIRED', retryNow);
+        return;
+      }
       this.runner.fail(job.id, {
-        now: this.now(),
+        now: retryNow,
         errorCode: retryableError,
-        retryAt: this.now() + retryDelay,
+        retryAt: Math.min(retryNow + retryDelay, payload.occurrenceAt),
       });
       return;
     }

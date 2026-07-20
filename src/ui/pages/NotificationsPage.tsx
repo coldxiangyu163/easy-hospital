@@ -13,6 +13,7 @@ type NotificationsState =
 function terminalReasonDetail(reason: string | null): string | undefined {
   const details: Record<string, string> = {
     RELEASE_REMINDER_MISSED: '电脑在计划时间未运行，本次已记为错过；后续规则提醒仍会继续安排。',
+    RELEASE_REMINDER_RETRY_EXPIRED: '通知渠道重试已到放号时刻，本次停止重试；最后一次渠道错误已保留。',
     NOTIFICATION_CHANNEL_NOT_FOUND: '当时没有可用的真实通知渠道。',
     TASK_CHANGED: '任务已修改，旧条件产生的提醒已取消。',
     TASK_INACTIVE: '任务已暂停，未发送旧提醒。',

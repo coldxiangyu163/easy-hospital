@@ -12,6 +12,32 @@ import { listWatchTasks } from './watch-tasks.js';
 
 const PUMCH_ADAPTER_KEY = 'pumch-public-dermatology-schedule';
 
+type ReleaseRuleScope = {
+  hospitalId: string;
+  campusId: string | null;
+  departmentId: string;
+};
+
+function matchesReleaseRuleScope(
+  candidate: ReleaseRuleScope,
+  scope: ReleaseRuleScope,
+): boolean {
+  return (
+    candidate.hospitalId === scope.hospitalId &&
+    candidate.campusId === scope.campusId &&
+    candidate.departmentId === scope.departmentId
+  );
+}
+
+export function getEnabledReleaseRuleForScope(
+  database: SqliteDatabase,
+  scope: ReleaseRuleScope,
+): ReleaseRule | undefined {
+  return listReleaseRules(database).find(
+    (candidate) => candidate.enabled && matchesReleaseRuleScope(candidate, scope),
+  );
+}
+
 export function createSourceScopeKey(input: {
   adapterKey: string;
   hospitalId: string;
@@ -80,13 +106,7 @@ export function scheduleWatchTask(
     return;
   }
 
-  const rule = listReleaseRules(database).find(
-    (candidate) =>
-      candidate.enabled &&
-      candidate.hospitalId === task.hospitalId &&
-      candidate.campusId === task.campusId &&
-      candidate.departmentId === task.departmentId,
-  );
+  const rule = getEnabledReleaseRuleForScope(database, task);
   if (!rule) return;
 
   const shifted = new Date(now + 8 * 60 * 60 * 1_000);
@@ -100,7 +120,7 @@ export function scheduleWatchTask(
       minute,
     );
     const reminderAt = occurrenceAt - task.remindBeforeMinutes * 60_000;
-    if (reminderAt < now) continue;
+    if (occurrenceAt < now) continue;
 
     const target = new Date(
       Date.UTC(
@@ -115,6 +135,19 @@ export function scheduleWatchTask(
       String(target.getUTCDate()).padStart(2, '0'),
     ].join('-');
     if (targetDate < task.dateFrom || targetDate > task.dateTo) continue;
+
+    const existingBatch = database
+      .prepare(
+        `SELECT 1 FROM notification_batch
+         WHERE task_id = ?
+           AND json_extract(event_ids_json, '$.kind') = 'release-reminder'
+           AND json_extract(event_ids_json, '$.occurrenceAt') = ?
+           AND json_extract(event_ids_json, '$.targetDate') = ?
+           AND official_entry_url = ?
+         LIMIT 1`,
+      )
+      .get(task.id, occurrenceAt, targetDate, rule.officialEntryUrl);
+    if (existingBatch) continue;
 
     if (runner.hasActiveTaskJob('release-reminder', task.id, task.version)) return;
     // dedupeKey 含目标日期与官方入口哈希：规则改 advanceDays 或 URL 后，
@@ -135,7 +168,7 @@ export function scheduleWatchTask(
         officialEntryUrl: rule.officialEntryUrl,
         needsReconfirmation: rule.needsReconfirmation,
       },
-      runAt: reminderAt,
+      runAt: Math.max(reminderAt, now),
       dedupeKey: `release-reminder:${task.id}:${task.version}:${rule.id}:${occurrenceAt}:${targetDate}:${urlHash}`,
       maxAttempts: 4,
     });
@@ -183,8 +216,8 @@ export function releaseRuleMatchesOccurrence(
 // 实现为物理删除 pending 行（而非置 cancelled）：job 表的 dedupe_key UNIQUE 会
 // 拦截同 occurrence 的再次 enqueue，删除才能释放 dedupe 位，让 disable→enable
 // 重排能重建相同时刻的 job；提醒发送历史以 notification_batch 为准，job 行不作审计。
-// 已被 worker claim 的 running job 不在此处理（租约很短，且 worker 侧对 rule
-// 不存在/停用仍 fail closed），属可接受的残余窗口。
+// 已被 worker claim 的 running job 不在此处理；worker 发送前会校验当前首选规则，
+// 旧 job 终止后再为仍有效任务补排当前规则。
 export function cancelPendingReleaseReminderJobs(
   database: SqliteDatabase,
   ruleId: string,
@@ -203,9 +236,72 @@ export function cancelPendingReleaseReminderJobs(
     .run(ruleId).changes;
 }
 
-// 规则 PATCH 后重排：先取消旧 job，再按规则的当前状态为匹配 scope 的 enabled 任务
-// 立即重排——改时间后新时刻产生新 job，disable 后不再排，enable 后无需重启即可恢复。
-// scheduleWatchTask 内部会再次核对规则 enabled 与任务字段，幂等安全。
+// 规则增删改后按 scope 收敛到唯一生效规则。规则按 listReleaseRules 的
+// created_at/id 顺序选择；若更早规则进入 scope，会取消后到规则的 pending job。
+// running job 由 worker 在发送前再次校验并在终止后补排。
+export function reconcileReleaseReminderScopes(
+  database: SqliteDatabase,
+  runner: SqliteJobRunner,
+  adapters: Map<string, SourceAdapter>,
+  scopes: ReleaseRuleScope[],
+  now: number,
+  invalidatedRules: Array<{
+    id: string;
+    reason: 'RULE_CHANGED' | 'RULE_DELETED';
+  }> = [],
+): number {
+  let cancelled = 0;
+  const cancelledRuleIds = new Set<string>();
+  const cancelRule = (
+    ruleId: string,
+    reason: 'RULE_CHANGED' | 'RULE_DELETED',
+  ): void => {
+    if (cancelledRuleIds.has(ruleId)) return;
+    cancelledRuleIds.add(ruleId);
+    cancelled += cancelPendingReleaseReminderJobs(database, ruleId, reason, now);
+  };
+  for (const rule of invalidatedRules) cancelRule(rule.id, rule.reason);
+
+  const uniqueScopes = [
+    ...new Map(
+      scopes.map((scope) => [
+        JSON.stringify([scope.hospitalId, scope.campusId, scope.departmentId]),
+        scope,
+      ]),
+    ).values(),
+  ];
+  const tasks = listWatchTasks(database);
+  const pendingJobs = database
+    .prepare(
+      `SELECT
+         json_extract(payload_json, '$.taskId') AS task_id,
+         json_extract(payload_json, '$.ruleId') AS rule_id
+       FROM job
+       WHERE type = 'release-reminder' AND state = 'pending'`,
+    )
+    .all() as Array<{ task_id: string | null; rule_id: string | null }>;
+
+  for (const scope of uniqueScopes) {
+    const scopeTasks = tasks.filter((task) => matchesReleaseRuleScope(task, scope));
+    const scopeTaskIds = new Set(scopeTasks.map((task) => task.id));
+    const selectedRule = getEnabledReleaseRuleForScope(database, scope);
+    for (const job of pendingJobs) {
+      if (
+        job.task_id &&
+        job.rule_id &&
+        scopeTaskIds.has(job.task_id) &&
+        job.rule_id !== selectedRule?.id
+      ) {
+        cancelRule(job.rule_id, 'RULE_CHANGED');
+      }
+    }
+    for (const task of scopeTasks) {
+      if (task.enabled) scheduleWatchTask(database, runner, task, adapters, now);
+    }
+  }
+  return cancelled;
+}
+
 export function rescheduleReleaseRemindersForRule(
   database: SqliteDatabase,
   runner: SqliteJobRunner,
@@ -213,17 +309,7 @@ export function rescheduleReleaseRemindersForRule(
   rule: ReleaseRule,
   now: number,
 ): number {
-  const cancelled = cancelPendingReleaseReminderJobs(database, rule.id, 'RULE_CHANGED', now);
-  for (const task of listWatchTasks(database)) {
-    if (!task.enabled) continue;
-    if (
-      task.hospitalId !== rule.hospitalId ||
-      task.campusId !== rule.campusId ||
-      task.departmentId !== rule.departmentId
-    ) {
-      continue;
-    }
-    scheduleWatchTask(database, runner, task, adapters, now);
-  }
-  return cancelled;
+  return reconcileReleaseReminderScopes(database, runner, adapters, [rule], now, [
+    { id: rule.id, reason: 'RULE_CHANGED' },
+  ]);
 }

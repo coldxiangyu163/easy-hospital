@@ -121,6 +121,45 @@ describe('通知记录', () => {
     expect(screen.queryByText('发送失败')).not.toBeInTheDocument();
   });
 
+  it('规则提醒重试跨过放号 deadline 时不误写成电脑未运行', async () => {
+    const expiredBatch = {
+      ...batch,
+      id: 'batch-reminder-retry-expired',
+      state: 'failed',
+      kind: 'release-reminder',
+      targetDate: '2026-07-26',
+      terminalReason: 'RELEASE_REMINDER_RETRY_EXPIRED',
+      deliveries: [
+        {
+          channel: 'bark',
+          state: 'failed',
+          attempts: 3,
+          messageId: 'm-expired',
+          errorCode: 'BARK_HTTP_500',
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/notification-batches') return jsonResponse({ batches: [expiredBatch] });
+      if (path === '/api/watch-tasks') return jsonResponse({ tasks: [task] });
+      if (path === '/api/catalog') return jsonResponse(catalog);
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/notifications']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText('通知渠道重试已到放号时刻，本次停止重试；最后一次渠道错误已保留。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/电脑.*未运行/)).not.toBeInTheDocument();
+  });
+
   it('陈旧事件终态展示诚实原因，不伪装准时送达', async () => {
     const staleBatch = {
       ...batch,

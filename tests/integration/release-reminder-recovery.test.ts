@@ -21,7 +21,7 @@ describe('Release reminder 恢复状态机', () => {
     if (directory) await rm(directory, { recursive: true, force: true });
   });
 
-  it('休眠错过 5 分钟后记录 missed 且仍安排下个 occurrence', async () => {
+  it('从未尝试且超过 occurrenceAt 后记录 missed，并仍安排下个 occurrence', async () => {
     const beforeReminder = Date.parse('2026-07-19T00:00:00.000Z');
     let now = beforeReminder;
     let sends = 0;
@@ -205,7 +205,7 @@ describe('Release reminder 恢复状态机', () => {
     remindBeforeMinutes: 5,
   };
 
-  it('计划提醒被 claim 后崩溃，超过 5 分钟恢复不补发且记为 missed', async () => {
+  it('计划提醒被 claim 后崩溃，超过 occurrenceAt 恢复不补发且记为 missed', async () => {
     let now = Date.parse('2026-07-19T00:00:00.000Z');
     let sends = 0;
     const channel: NotificationChannel = {
@@ -268,7 +268,7 @@ describe('Release reminder 恢复状态机', () => {
     expect(sends).toBe(0);
   });
 
-  it('重试等待期间越过错过窗口，批次进入 missed 终态而非永久悬挂', async () => {
+  it('已有渠道失败后跨过 occurrenceAt，批次标记 retry expired 并保留最后错误', async () => {
     let now = Date.parse('2026-07-19T00:00:00.000Z');
     const reminderAt = Date.parse('2026-07-19T06:55:00.000Z');
     let sends = 0;
@@ -298,7 +298,7 @@ describe('Release reminder 恢复状态机', () => {
     now = reminderAt;
     await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
 
-    // 首轮失败 retryAt=+60s；休眠到 reminderAt+400s（距计划 > 300s）
+    // 首轮失败 retryAt=+60s；休眠到 occurrenceAt 之后。
     now = reminderAt + 400_000;
     await expect
       .poll(
@@ -310,17 +310,157 @@ describe('Release reminder 恢复状态机', () => {
       )
       .toMatchObject({
         state: 'failed',
-        terminalReason: 'RELEASE_REMINDER_MISSED',
+        terminalReason: 'RELEASE_REMINDER_RETRY_EXPIRED',
         deliveries: [
           expect.objectContaining({
             state: 'failed',
-            errorCode: 'RELEASE_REMINDER_MISSED',
+            errorCode: 'TEMPORARY',
             attempts: 1,
           }),
         ],
       });
     now += 600_000;
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sends).toBe(1);
+  });
+
+  it('提前 30 分钟提醒保留 1/5/15 分钟完整重试阶梯', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    let sends = 0;
+    const channel: NotificationChannel = {
+      key: 'reminder-30-minute-deadline',
+      async send() {
+        sends += 1;
+        return { status: 'rejected', errorCode: `TEMP_${sends}`, retryable: true };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-30-minute-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: { ...reminderTaskPayload, remindBeforeMinutes: 30 },
+    });
+
+    for (const [attemptAt, expectedSends] of [
+      ['2026-07-19T06:30:00.000Z', 1],
+      ['2026-07-19T06:31:00.000Z', 2],
+      ['2026-07-19T06:36:00.000Z', 3],
+      ['2026-07-19T06:51:00.000Z', 4],
+    ] as const) {
+      now = Date.parse(attemptAt);
+      await expect.poll(() => sends, { timeout: 1_000 }).toBe(expectedSends);
+    }
+
+    const batch = (
+      await app.inject({ method: 'GET', url: '/api/notification-batches', headers })
+    ).json().batches[0];
+    expect(batch).toMatchObject({
+      state: 'failed',
+      terminalReason: null,
+      deliveries: [
+        expect.objectContaining({ attempts: 4, errorCode: 'TEMP_4', state: 'failed' }),
+      ],
+    });
+  });
+
+  it('提前 5 分钟提醒把越界退避 clamp 到 occurrenceAt，并在该时刻最后尝试', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    let sends = 0;
+    const channel: NotificationChannel = {
+      key: 'reminder-5-minute-deadline',
+      async send() {
+        sends += 1;
+        return { status: 'rejected', errorCode: `TEMP_${sends}`, retryable: true };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-5-minute-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: reminderTaskPayload,
+    });
+
+    now = Date.parse('2026-07-19T06:55:00.000Z');
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
+    now = Date.parse('2026-07-19T06:56:00.000Z');
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(2);
+    now = Date.parse('2026-07-19T06:59:00.000Z');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sends).toBe(2);
+
+    now = Date.parse('2026-07-19T07:00:00.000Z');
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(3);
+    const batch = (
+      await app.inject({ method: 'GET', url: '/api/notification-batches', headers })
+    ).json().batches[0];
+    expect(batch).toMatchObject({
+      state: 'failed',
+      terminalReason: 'RELEASE_REMINDER_RETRY_EXPIRED',
+      deliveries: [
+        expect.objectContaining({ attempts: 3, errorCode: 'TEMP_3', state: 'failed' }),
+      ],
+    });
+  });
+
+  it('提前 0 分钟提醒在 occurrenceAt 可最后尝试，失败后不再重试', async () => {
+    let now = Date.parse('2026-07-19T00:00:00.000Z');
+    let sends = 0;
+    const channel: NotificationChannel = {
+      key: 'reminder-0-minute-deadline',
+      async send() {
+        sends += 1;
+        return { status: 'rejected', errorCode: 'TEMP_AT_DEADLINE', retryable: true };
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-reminder-0-minute-'));
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      notificationChannels: [channel],
+      workerPollMs: 5,
+      now: () => now,
+    });
+    const headers = { host: '127.0.0.1' };
+    await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers,
+      payload: { ...reminderTaskPayload, remindBeforeMinutes: 0 },
+    });
+
+    now = Date.parse('2026-07-19T07:00:00.000Z');
+    await expect.poll(() => sends, { timeout: 1_000 }).toBe(1);
+    const batch = (
+      await app.inject({ method: 'GET', url: '/api/notification-batches', headers })
+    ).json().batches[0];
+    expect(batch).toMatchObject({
+      state: 'failed',
+      terminalReason: 'RELEASE_REMINDER_RETRY_EXPIRED',
+      deliveries: [
+        expect.objectContaining({
+          attempts: 1,
+          errorCode: 'TEMP_AT_DEADLINE',
+          state: 'failed',
+        }),
+      ],
+    });
+    now += 60_000;
+    await new Promise((resolve) => setTimeout(resolve, 30));
     expect(sends).toBe(1);
   });
 
