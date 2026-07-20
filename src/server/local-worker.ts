@@ -22,6 +22,7 @@ import {
   recordDeliveryRetry,
 } from '../storage/notification-outbox.js';
 import { getReleaseRule } from '../storage/release-rules.js';
+import { runDataRetention } from '../storage/retention.js';
 import {
   createSourceScopeKey,
   getEnabledReleaseRuleForScope,
@@ -48,6 +49,8 @@ export type WorkerHealth = {
   lastRebaselineAt: string | null;
 };
 
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1_000;
+
 type SourceCheckJobPayload = {
   adapterKey: string;
   sourceId: string;
@@ -70,6 +73,7 @@ export class LocalWorker {
   private lastErrorCode: string | null = null;
   private heartbeatGapMs: number | null = null;
   private lastRebaselineAt: number | null = null;
+  private lastRetentionAt: number | null = null;
 
   constructor(
     private readonly database: SqliteDatabase,
@@ -148,6 +152,13 @@ export class LocalWorker {
       recoverAmbiguousSendingDeliveries(this.database, now);
       cancelInvalidNotificationBatches(this.database, now);
       prepareDueNotificationJobs(this.database, this.runner, [...this.channels.keys()], now);
+      if (
+        this.lastRetentionAt === null ||
+        now - this.lastRetentionAt >= RETENTION_INTERVAL_MS
+      ) {
+        runDataRetention(this.database, now);
+        this.lastRetentionAt = now;
+      }
       const job = this.runner.claimNext({ now, leaseMs: 30_000 });
       if (!job) return;
 

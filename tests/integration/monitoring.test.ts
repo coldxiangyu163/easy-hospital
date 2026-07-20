@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,8 +7,14 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { SourceAdapter } from '../../src/core/source-adapter.js';
+import { createPumchDermatologyScheduleAdapter } from '../../src/adapters/sources/pumch.js';
+import {
+  runSourceAdapter,
+  type SourceAdapter,
+} from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
+import { openDatabase } from '../../src/storage/database.js';
+import { applyCheckResult } from '../../src/storage/monitoring.js';
 
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -688,6 +695,77 @@ describe('Observation 到事件的 HTTP /api 纵向切片', () => {
       fromState: 'unavailable',
       toState: 'available',
     });
+  });
+
+  it('生产 Adapter 白名单化后不会把 Cookie、Token、手机号或身份证写入 SQLite 文件', async () => {
+    const cookieCanary = 'session=COOKIE_CANARY_4f930bf7';
+    const tokenCanary = 'TOKEN_CANARY_7df3c19a';
+    const phoneCanary = '13900001234';
+    const idCardCanary = '110101199001011234';
+    const html = `
+      <div id="docker-visit" data-cookie="${cookieCanary}" data-token="${tokenCanary}">
+        <table>
+          <tr><th class="th3">2026.07.20</th></tr>
+          <tr>
+            <td>上午</td>
+            <td class="tdh3">
+              <a href="/doctor" data-mobile="${phoneCanary}" data-id-card="${idCardCanary}">医生甲</a>
+            </td>
+          </tr>
+        </table>
+      </div>
+    `;
+    const adapter = createPumchDermatologyScheduleAdapter({
+      fetchImpl: async () =>
+        new Response(html, {
+          status: 200,
+          headers: {
+            'set-cookie': cookieCanary,
+            'x-source-token': tokenCanary,
+            'x-source-mobile': phoneCanary,
+            'x-source-id-card': idCardCanary,
+          },
+        }),
+      now: () => new Date('2026-07-19T00:00:00.000Z'),
+    });
+    const result = await runSourceAdapter(adapter, {
+      requestId: 'privacy-canary-request',
+      sourceId: 'source-pumch-privacy-canary',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      dateFrom: '2026-07-20',
+      dateTo: '2026-07-20',
+      doctorName: null,
+      titles: [],
+      session: 'ANY',
+      deadlineAt: '2026-07-19T00:01:00.000Z',
+    });
+    expect(result.observations).toHaveLength(1);
+
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-monitoring-privacy-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const database = openDatabase(databasePath);
+    try {
+      applyCheckResult(database, {
+        sourceId: 'source-pumch-privacy-canary',
+        scopeKey: 'pumch-privacy-canary-scope',
+        requestId: 'privacy-canary-request',
+        result,
+      });
+
+      const sqlitePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+      expect(sqlitePaths.every((path) => existsSync(path))).toBe(true);
+      const canaries = [cookieCanary, tokenCanary, phoneCanary, idCardCanary];
+      for (const sqlitePath of sqlitePaths) {
+        const bytes = readFileSync(sqlitePath);
+        for (const canary of canaries) {
+          expect(bytes.includes(Buffer.from(canary))).toBe(false);
+        }
+      }
+    } finally {
+      database.close();
+    }
   });
 
   it('availability unknown 仍持久化排班基线，重复排班不误报而新增 slot 才报发布', async () => {
