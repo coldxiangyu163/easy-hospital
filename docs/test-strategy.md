@@ -10,7 +10,7 @@
 
 1. 北京协和医院东单院区皮肤科公开排班可被规范化，baseline 后的新排班只产生 `schedule_released`；排班不被写成实时有号。
 2. 北京同仁医院崇文门院区鼻科只创建 C 级规则提醒；医生、职称、时段和实时状态条件不参与判断。
-3. 任务日期限制为北京时间今天到今天加 14 天；客户端提示与 API 校验一致。
+3. 任务日期同时限制为北京时间 today..+14d（含两端）且连续最多 14 个自然日；客户端提示与 API 校验一致。
 4. 规则提醒可持久恢复、按 scope reconciliation，并且失败重试不越过 `occurrenceAt`。
 5. 通知渠道只有成功 claim 到 `sending` 后才能发送/回写；规则变更终态不会被并发投递覆盖。
 6. 来源异常、停机和休眠恢复不会制造假事件；超过来源有效最小间隔 2 倍才静默重建 baseline（协和当前为 4 小时 grace）。
@@ -75,8 +75,8 @@
 
 ### 4.3 日期与北京时间
 
-- 创建、修改日期或重新启用任务时，范围必须是北京时间 today..+14d（含两端）。
-- 覆盖北京时间/UTC 跨日、月末、年末、闰日和机器 `TZ` 不同的场景。
+- 创建、修改日期或重新启用任务时，范围必须同时满足北京时间 today..+14d（含两端），以及开始到结束连续最多 14 个自然日。
+- 分别覆盖窗口边界与跨度边界：today→today+13 合法，today→today+14 因连续 15 个自然日而拒绝，today+1→today+14 合法；同时覆盖北京时间/UTC 跨日、月末、年末、闰日和机器 `TZ` 不同的场景。
 - UI 日期测试冻结系统时间，预期使用独立的固定日期字面量，不从生产 helper 反算。
 
 ### 4.4 空窗与 baseline
@@ -136,6 +136,14 @@
 
 不得在用户唯一数据库或运行中的真实实例上做演练。
 
+### 6.3 retention 与每日幂等清理
+
+- 用可控时钟和真实磁盘 SQLite 建立未到期/恰到期/已过期样本：可用性快照保留 30 天，检测事件、通知批次和通知投递保留 90 天。
+- 每日 cleanup Job 必须由生产 Runner 领取执行；不得在测试中直接删除表记录来代替生产路径。
+- 同一日期重复 planner、重复领取恢复或重复执行 cleanup，最终数据库状态相同且 Job/dedupe 不膨胀。
+- 清理后过期数据为零，未到期数据完整；外键、事件—批次—投递关联与仍在保留期内的去重证据不被破坏。
+- 测试明确区分业务 retention 与迁移备份/rollback 保留，不允许 30/90 天清理误删备份文件。
+
 ## 7. 本机 HTTP 与安全门禁
 
 - 真实 socket 测试固定绑定 `127.0.0.1`，覆盖 Host、absolute-form、`X-Forwarded-*`、DNS rebinding 和 Origin。
@@ -145,6 +153,13 @@
 - 5xx 对外只返回脱敏错误；SQLite、路径、schema 和内部异常不得回显。
 - migration 17 的 `hospital_domain` 是 URL policy 事实源：entry 必须命中 `official` kind，source 必须命中 `evidence` kind。
 - Adapter 出网与重定向只允许 manifest 域；阻止 loopback、私网、链路本地、云元数据和非 HTTPS scheme。
+
+### 7.1 隐私金丝雀与完整历史扫描
+
+- 将明显虚构、可精确检索的密钥、Cookie、Token、手机号、身份证号、用户绝对路径、PID 和 pane 标识注入成功/失败链路。
+- 全链路结束后扫描 SQLite 主库、WAL、SHM、迁移备份、rollback、应用/Runner/Adapter/通知日志、fixture、Playwright/CI artifact；禁止字段明文必须零命中。
+- 发布前扫描**完整 Git 历史中的所有对象与路径**，不能只扫描 HEAD 或当前工作树。真实密钥、医院会话、个人数据、SQLite/WAL/SHM、日志、构建/测试产物、机器专属绝对路径、PID、Herdr pane 和临时交接资源必须零命中。
+- 历史扫描任一命中即阻塞发布；删除工作树文件不算修复，必须从 Git 历史移除并对重写后的完整历史重新扫描。
 
 ## 8. Playwright、CI 与全新安装
 
@@ -180,12 +195,13 @@ npm audit --omit=dev --registry=https://registry.npmjs.org
 - Fork/PR 不获得 live 来源、Browser Agent 或真实通知秘密。
 - E2E 与 smoke 禁止真实来源，并拦截非 loopback 出网。
 - 失败 artifacts 上传前必须脱敏；不上传 SQLite/WAL/SHM、备份、浏览器 profile 或真实消息正文。
+- RC 发布门禁必须另跑完整 Git 历史扫描与隐私金丝雀扫描；两者任一非零命中即失败。
 
 ### 8.3 RC 全新 copy
 
 - 使用候选 commit 的临时 copy，不复用工作区 `node_modules`、构建产物、数据目录、环境变量或后台进程。
 - `npm ci --ignore-scripts` 用于验证锁文件本身可解析且不会改工作树；正式构建/运行依赖原生模块时，再按公开安装流程执行正常 `npm ci`。
-- 检查 lockfile 的根版本与 `package.json` 一致，resolved 不含非候选允许的镜像来源。
+- 检查 lockfile 的根版本与 `package.json` 一致；每个非空 `resolved` 都必须是合法 URL 且 hostname 严格等于 `registry.npmjs.org`。
 - 执行 build、release metadata、production smoke 和 v16→v17 演练；清理临时数据和密钥。
 
 ## 9. 实验实时号源门禁
@@ -221,6 +237,8 @@ npm audit --omit=dev --registry=https://registry.npmjs.org
 | ST-07 | 稳定阻塞 | HTTP/出网 | Host/Origin/client header、URL 域、5xx 脱敏和 loopback 隔离通过 |
 | ST-08 | 稳定阻塞 | UI/E2E | 任务、规则、来源健康、无障碍关键流程与真实 Chromium 通过 |
 | ST-09 | 稳定阻塞 | 构建与 smoke | lint、typecheck、test、build、release check、smoke、E2E 通过 |
+| ST-10 | 稳定阻塞 | retention | 快照 30 天、事件/通知 90 天、每日 cleanup 幂等且不破坏未到期引用 |
+| ST-11 | 稳定阻塞 | 隐私与完整历史 | Git 全历史及 SQLite/WAL/SHM/备份/日志/fixture/artifact 金丝雀扫描零命中 |
 | EXP-01 | 实验不阻塞 | available/cancellation 自动化 | 状态机与聚合测试通过，仍标实验 |
 | EXP-02 | 实验不阻塞 | Browser Agent 自动化 | 配对、重放、脱敏、失效测试通过，仍标实验 |
 | EXP-03 | 升稳才阻塞 | E3 + 7 天 soak | 仅用于扩大实时号源/退号稳定声明 |
@@ -233,4 +251,4 @@ npm audit --omit=dev --registry=https://registry.npmjs.org
 - 不把删除数据库重新开始当作恢复验证。
 - 不把 E3/7 天 soak 错写为当前排班/规则提醒补丁的发布阻塞项。
 
-每个候选保留脱敏证据：commit、版本、lockfile hash、Node/npm/OS、自动化结果、migration/restore 记录、E2E/smoke、已知限制。live、真实通知和 E3 证据单独归档，且不得进入公开仓库或日志。
+每个候选保留脱敏证据：commit、版本、lockfile hash、Node/npm/OS、自动化结果、migration/restore/retention 记录、完整 Git 历史扫描、隐私金丝雀扫描、E2E/smoke 和已知限制。live、真实通知和 E3 证据单独归档，且不得进入公开仓库或日志。

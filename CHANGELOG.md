@@ -18,11 +18,12 @@
 
 - 新增 migration 17 `hospital-domain-policy`，以 `hospital_domain` 表统一维护 `official` 与 `evidence` 域：预约入口只接受 `official` kind，证据来源只接受 `evidence` kind；同一官方域可分别登记两种 kind，未登记范围拒绝写入。
 - 打开现有数据库时继续执行完整性检查、migration checksum 校验和迁移前一致性备份；数据目录、数据库、WAL/SHM、迁移备份与生产 `.env` 在支持 POSIX 权限的平台收紧为当前用户访问。
+- 恢复 retention 清理：可用性快照保留 30 天，检测事件、通知批次与投递保留 90 天，并由每日持久化 cleanup Job 幂等删除到期业务记录。
 - 带 `Origin` 的普通写请求必须同时来自 loopback Web Origin 并携带 `x-easy-hospital-client: web`；5xx 响应脱敏，目录引用和来源政策在写入前校验。
 
 ### 界面与契约
 
-- 新建或重新启用任务的日期限制统一为北京时间今天至今天加 14 天；客户端日期边界与服务端校验一致。
+- 新建、修改日期或重新启用任务时，日期必须同时落在北京时间 today..+14d（含两端），且开始至结束连续最多 14 个自然日；客户端日期边界与服务端校验一致。
 - 同仁鼻科 C 级任务统一为规则提醒：客户端忽略医生、职称和时段并只提交 `schedule_released`，API 对不符合该规范的创建或编辑返回 `SOURCE_POLICY_VIOLATION`，不会把 C 级文案写成实时排班或号源状态。
 - 任务编辑保留已有事件类型与提醒分钟；来源页区分最后成功和最后失败；补齐 skip link、对比度、对话框 inert 与焦点恢复。
 

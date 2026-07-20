@@ -107,7 +107,7 @@ RADAR_TIMEZONE=Asia/Shanghai
 - 带 `Origin` 的普通 `POST`、`PATCH`、`DELETE` 等写请求，`Origin` 必须是 loopback Web Origin，并必须携带 `x-easy-hospital-client: web`。缺失或取值错误返回 `403 CLIENT_HEADER_REQUIRED`；跨站 Origin 返回 `403 LOCAL_ORIGIN_REQUIRED`。
 - 无 `Origin` 的本机 CLI 请求保留给 `curl` 等非浏览器客户端，但仍受 loopback Host、输入 schema、catalog 和来源政策校验；这不代表可以通过反向代理暴露服务。
 - Browser Agent observation 使用独立的 `chrome-extension://` Origin、nonce/HMAC 和 Bearer 配对契约，不使用 `x-easy-hospital-client: web` 代替扩展认证。
-- 创建任务，以及修改日期或重新启用任务时，`dateFrom`/`dateTo` 必须落在**北京时间今天到今天加 14 天（含两端）**；非法范围返回 `400 VALIDATION_ERROR`。
+- 创建任务，以及修改日期或重新启用任务时，`dateFrom`/`dateTo` 必须同时满足：落在**北京时间今天到今天加 14 天（含两端）**，且从开始日期到结束日期**连续最多 14 个自然日**；任一条件不满足都返回 `400 VALIDATION_ERROR`。
 - 同仁崇文门鼻科是 C 级规则提醒。管理端提交前会规范化为 `matchMode=any_expert`、`doctorName=null`、空职称、`session=ANY`、仅 `schedule_released`，并要求非空的 `remindBeforeMinutes`。API 不会替第三方调用者静默改写：创建或编辑结果不符合上述规范时返回 `400 SOURCE_POLICY_VIOLATION`。
 
 ### 测试与 CI 来源隔离
@@ -213,6 +213,10 @@ SMTP_SECURE=false
 - 共享诊断前移除通知地址、设备 Key、用户目录和任务条件。
 
 项目默认无遥测、崩溃上报和云同步。允许的出站连接只有医院官方来源、用户配置的通知渠道，以及用户主动打开的 GitHub 页面。
+
+### 数据保留
+
+稳定 retention 契约为：归一化可用性快照保留 30 天，检测事件、通知批次和通知投递保留 90 天。`LocalWorker` 通过每日持久化 cleanup Job 幂等清理到期业务记录；重复运行不能提前删除、破坏仍在保留期内的关联或影响迁移备份、rollback 和用户自行保存的停机备份。
 
 ## Playwright
 

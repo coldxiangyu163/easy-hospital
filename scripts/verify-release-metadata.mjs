@@ -6,10 +6,9 @@ const root = new URL('../', import.meta.url);
 const readText = (path) => readFile(new URL(path, root), 'utf8');
 const readJson = async (path) => JSON.parse(await readText(path));
 
-const [manifest, lockfile, lockfileText, license, readme, changelog] = await Promise.all([
+const [manifest, lockfile, license, readme, changelog] = await Promise.all([
   readJson('package.json'),
   readJson('package-lock.json'),
-  readText('package-lock.json'),
   readText('LICENSE'),
   readText('README.md'),
   readText('CHANGELOG.md'),
@@ -25,7 +24,23 @@ assert.equal(
   'package-lock.json 根包版本必须与 package.json 一致',
 );
 assert.equal(lockfile.packages?.['']?.license, 'MIT', 'package-lock.json 根包许可证必须是 MIT');
-assert.doesNotMatch(lockfileText, /registry\.npmmirror\.com/, 'package-lock.json 不得引用 npmmirror');
+for (const [packagePath, metadata] of Object.entries(lockfile.packages ?? {})) {
+  const resolved = metadata?.resolved;
+  if (resolved === undefined || resolved === null || resolved === '') continue;
+  assert.equal(typeof resolved, 'string', `${packagePath} 的 resolved 必须是 URL 字符串`);
+
+  let resolvedUrl;
+  try {
+    resolvedUrl = new URL(resolved);
+  } catch {
+    assert.fail(`${packagePath} 的 resolved 不是合法 URL：${resolved}`);
+  }
+  assert.equal(
+    resolvedUrl.hostname,
+    'registry.npmjs.org',
+    `${packagePath} 的 resolved 必须来自 registry.npmjs.org`,
+  );
+}
 const escapedVersion = manifest.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 assert.match(
   changelog,
