@@ -25,6 +25,9 @@ type CatalogState =
 
 type FormErrors = Partial<Record<'dateFrom' | 'dateTo' | 'doctorName' | 'titles' | 'form', string>>;
 type FieldErrorKey = Exclude<keyof FormErrors, 'form'>;
+type FieldErrorUpdates = Partial<Record<FieldErrorKey, string>>;
+
+const fieldValidationSummary = '请修正下面标出的内容后再提交。';
 
 function dateSpanInDays(from: string, to: string): number {
   return (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
@@ -45,6 +48,53 @@ function addDateDays(dateKey: string, days: number): string {
   const date = new Date(`${dateKey}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function parseTitles(value: string): string[] {
+  return value.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function validateDates(
+  from: string,
+  to: string,
+  earliestDate: string,
+  latestDate: string,
+): FieldErrorUpdates {
+  const nextErrors: FieldErrorUpdates = {};
+
+  if (!from) nextErrors.dateFrom = '请选择开始日期。';
+  else if (from < earliestDate) nextErrors.dateFrom = '不能选择今天之前的日期。';
+  else if (from > latestDate) nextErrors.dateFrom = '最多可选择北京时间今天起 14 天内的日期。';
+
+  if (!to) nextErrors.dateTo = '请选择结束日期。';
+  else if (to < earliestDate) nextErrors.dateTo = '不能选择今天之前的日期。';
+  else if (to > latestDate) nextErrors.dateTo = '最多可选择北京时间今天起 14 天内的日期。';
+
+  if (from && to && !nextErrors.dateFrom && !nextErrors.dateTo) {
+    if (to < from) nextErrors.dateTo = '结束日期不能早于开始日期。';
+    else if (dateSpanInDays(from, to) > 14) nextErrors.dateTo = '日期范围最多为连续 14 天。';
+  }
+
+  return nextErrors;
+}
+
+function replaceFieldErrors(
+  current: FormErrors,
+  fields: FieldErrorKey[],
+  updates: FieldErrorUpdates,
+): FormErrors {
+  const next = { ...current };
+  for (const field of fields) {
+    const message = updates[field];
+    if (message) next[field] = message;
+    else delete next[field];
+  }
+
+  const hasFieldErrors = Object.entries(next)
+    .some(([key, message]) => key !== 'form' && Boolean(message));
+  if (hasFieldErrors && !next.form) next.form = fieldValidationSummary;
+  else if (!hasFieldErrors && next.form === fieldValidationSummary) delete next.form;
+  return next;
 }
 
 export function TaskFormPage() {
@@ -68,6 +118,7 @@ export function TaskFormPage() {
   const [remindBeforeMinutes, setRemindBeforeMinutes] = useState<number | null>(null);
   const [version, setVersion] = useState<number | null>(null);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [validationActive, setValidationActive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const errorSummaryRef = useRef<HTMLDivElement>(null);
 
@@ -152,10 +203,7 @@ export function TaskFormPage() {
       officialHospitalUrl(selectedTarget.hospital)
     : undefined;
 
-  const titleOptions = useMemo(
-    () => titles.split(/[，,]/).map((item) => item.trim()).filter(Boolean),
-    [titles],
-  );
+  const titleOptions = useMemo(() => parseTitles(titles), [titles]);
   const earliestDate = todayInBeijing();
   const latestDate = addDateDays(earliestDate, 14);
 
@@ -167,24 +215,29 @@ export function TaskFormPage() {
     setTitles('');
     setSession('ANY');
     setErrors({});
+    setValidationActive(false);
   }
 
-  function clearFieldError(field: FieldErrorKey) {
-    setErrors((current) => {
-      if (!current[field]) return current;
-      const next = { ...current };
-      delete next[field];
-      if (!Object.entries(next).some(([key, message]) => key !== 'form' && Boolean(message))) {
-        delete next.form;
-      }
-      return next;
-    });
+  function updateFieldErrors(fields: FieldErrorKey[], updates: FieldErrorUpdates) {
+    if (!validationActive) return;
+    setErrors((current) => replaceFieldErrors(current, fields, updates));
   }
 
   function changeMatchMode(nextMatchMode: WatchTaskInput['matchMode']) {
     setMatchMode(nextMatchMode);
-    if (nextMatchMode !== 'doctor') clearFieldError('doctorName');
-    if (nextMatchMode !== 'title') clearFieldError('titles');
+    if (!validationActive) return;
+    const nextErrors: FieldErrorUpdates = {};
+    if (nextMatchMode === 'doctor' && !doctorName.trim()) {
+      nextErrors.doctorName = '请填写医生姓名。';
+    }
+    if (nextMatchMode === 'title' && parseTitles(titles).length === 0) {
+      nextErrors.titles = '请至少填写一个职称。';
+    }
+    setErrors((current) => replaceFieldErrors(
+      current,
+      ['doctorName', 'titles'],
+      nextErrors,
+    ));
   }
 
   function changeHospital(nextHospitalId: string) {
@@ -214,23 +267,17 @@ export function TaskFormPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setValidationActive(true);
     const nextErrors: FormErrors = {};
     if (!policy.canCreateWatchTask) {
       nextErrors.form = '这个 target 当前只有目录信息或已停用，不能创建或恢复关注任务。';
     }
-    if (!dateFrom) nextErrors.dateFrom = '请选择开始日期。';
-    if (!dateTo) nextErrors.dateTo = '请选择结束日期。';
-    if (dateFrom && dateFrom < earliestDate) nextErrors.dateFrom = '不能选择今天之前的日期。';
-    if (dateTo && dateTo > latestDate) nextErrors.dateTo = '最多可选择北京时间今天起 14 天内的日期。';
-    if (dateFrom && dateTo && dateTo < dateFrom) nextErrors.dateTo = '结束日期不能早于开始日期。';
-    if (dateFrom && dateTo && dateSpanInDays(dateFrom, dateTo) > 14) {
-      nextErrors.dateTo = '日期范围最多为连续 14 天。';
-    }
+    Object.assign(nextErrors, validateDates(dateFrom, dateTo, earliestDate, latestDate));
     if (!ruleOnly && matchMode === 'doctor' && !doctorName.trim()) nextErrors.doctorName = '请填写医生姓名。';
     if (!ruleOnly && matchMode === 'title' && titleOptions.length === 0) nextErrors.titles = '请至少填写一个职称。';
     if (!hospitalId || !campusId || !departmentId) nextErrors.form = '当前可关注范围不完整，请重新选择。';
     if (Object.keys(nextErrors).length > 0) {
-      nextErrors.form ??= '请修正下面标出的内容后再提交。';
+      nextErrors.form ??= fieldValidationSummary;
       setErrors(nextErrors);
       return;
     }
@@ -384,14 +431,14 @@ export function TaskFormPage() {
                   {matchMode === 'doctor' ? (
                     <div className={styles.field}>
                       <label htmlFor="doctor-name">医生姓名</label>
-                      <input id="doctor-name" value={doctorName} onChange={(event) => { setDoctorName(event.target.value); clearFieldError('doctorName'); }} aria-invalid={Boolean(errors.doctorName)} aria-describedby={errors.doctorName ? 'doctor-error' : undefined} />
+                      <input id="doctor-name" value={doctorName} onChange={(event) => { const nextDoctorName = event.target.value; setDoctorName(nextDoctorName); updateFieldErrors(['doctorName'], nextDoctorName.trim() ? {} : { doctorName: '请填写医生姓名。' }); }} aria-invalid={Boolean(errors.doctorName)} aria-describedby={errors.doctorName ? 'doctor-error' : undefined} />
                       {errors.doctorName ? <p id="doctor-error" className={styles.fieldError}>{errors.doctorName}</p> : null}
                     </div>
                   ) : null}
                   {matchMode === 'title' ? (
                     <div className={styles.field}>
                       <label htmlFor="titles">职称</label>
-                      <input id="titles" value={titles} onChange={(event) => { setTitles(event.target.value); clearFieldError('titles'); }} placeholder="例如：主任医师，副主任医师" aria-invalid={Boolean(errors.titles)} aria-describedby={errors.titles ? 'titles-error' : undefined} />
+                      <input id="titles" value={titles} onChange={(event) => { const nextTitles = event.target.value; setTitles(nextTitles); updateFieldErrors(['titles'], parseTitles(nextTitles).length > 0 ? {} : { titles: '请至少填写一个职称。' }); }} placeholder="例如：主任医师，副主任医师" aria-invalid={Boolean(errors.titles)} aria-describedby={errors.titles ? 'titles-error' : undefined} />
                       {errors.titles ? <p id="titles-error" className={styles.fieldError}>{errors.titles}</p> : null}
                     </div>
                   ) : null}
@@ -405,12 +452,12 @@ export function TaskFormPage() {
               <div className={styles.formGrid}>
                 <div className={styles.field}>
                   <label htmlFor="date-from">开始日期</label>
-                  <input id="date-from" type="date" min={earliestDate} max={latestDate} value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); clearFieldError('dateFrom'); }} aria-invalid={Boolean(errors.dateFrom)} aria-describedby={errors.dateFrom ? 'date-from-error' : undefined} />
+                  <input id="date-from" type="date" min={earliestDate} max={latestDate} value={dateFrom} onChange={(event) => { const nextDateFrom = event.target.value; setDateFrom(nextDateFrom); updateFieldErrors(['dateFrom', 'dateTo'], validateDates(nextDateFrom, dateTo, earliestDate, latestDate)); }} aria-invalid={Boolean(errors.dateFrom)} aria-describedby={errors.dateFrom ? 'date-from-error' : undefined} />
                   {errors.dateFrom ? <p id="date-from-error" className={styles.fieldError}>{errors.dateFrom}</p> : null}
                 </div>
                 <div className={styles.field}>
                   <label htmlFor="date-to">结束日期</label>
-                  <input id="date-to" type="date" min={earliestDate} max={latestDate} value={dateTo} onChange={(event) => { setDateTo(event.target.value); clearFieldError('dateTo'); }} aria-invalid={Boolean(errors.dateTo)} aria-describedby={errors.dateTo ? 'date-to-error' : undefined} />
+                  <input id="date-to" type="date" min={earliestDate} max={latestDate} value={dateTo} onChange={(event) => { const nextDateTo = event.target.value; setDateTo(nextDateTo); updateFieldErrors(['dateFrom', 'dateTo'], validateDates(dateFrom, nextDateTo, earliestDate, latestDate)); }} aria-invalid={Boolean(errors.dateTo)} aria-describedby={errors.dateTo ? 'date-to-error' : undefined} />
                   {errors.dateTo ? <p id="date-to-error" className={styles.fieldError}>{errors.dateTo}</p> : null}
                 </div>
                 {!ruleOnly ? (

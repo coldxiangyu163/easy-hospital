@@ -151,11 +151,16 @@ export function RulesPage() {
                 {Array.from({ length: 14 }, (_, index) => {
                   const releaseDate = addDays(today, index);
                   const appointmentDate = addDays(releaseDate, rule.advanceDays);
+                  const releaseDateLabel = formatBeijingDate(releaseDate);
+                  const appointmentDateLabel = formatBeijingDate(appointmentDate);
                   return (
-                    <li key={releaseDate}>
-                      <time dateTime={releaseDate}>{formatBeijingDate(releaseDate)}</time>
+                    <li
+                      key={releaseDate}
+                      aria-label={`提醒日期 ${releaseDateLabel}、提醒时间 ${rule.releaseTimeLocal}、目标就诊日期 ${appointmentDateLabel}`}
+                    >
+                      <time dateTime={releaseDate}>{releaseDateLabel}</time>
                       <span>{rule.releaseTimeLocal}</span>
-                      <small>{formatBeijingDate(appointmentDate)}</small>
+                      <small>{appointmentDateLabel}</small>
                     </li>
                   );
                 })}

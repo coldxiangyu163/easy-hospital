@@ -357,7 +357,7 @@ describe('创建关注任务', () => {
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
   });
 
-  it('在客户端阻止缺少日期和超过 14 天的提交，不放宽产品日期校验', async () => {
+  it('字段变更后按新值重算本地错误，且不触发提交', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/catalog') return jsonResponse(catalog);
@@ -384,21 +384,42 @@ describe('创建关注任务', () => {
     expect(screen.getByText('请选择结束日期。')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('请修正下面标出的内容后再提交。');
 
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
-    expect(screen.queryByText('请选择开始日期。')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('开始日期')).toHaveAttribute('aria-invalid', 'false');
-    expect(screen.getByRole('alert')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
-    expect(screen.queryByText('请选择结束日期。')).not.toBeInTheDocument();
-    expect(screen.getByRole('alert')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('医生姓名'), { target: { value: '   ' } });
+    expect(screen.getByText('请填写医生姓名。')).toBeInTheDocument();
+    expect(screen.getByLabelText('医生姓名')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('请修正下面标出的内容后再提交。');
     fireEvent.change(screen.getByLabelText('医生姓名'), { target: { value: '张医生' } });
     expect(screen.queryByText('请填写医生姓名。')).not.toBeInTheDocument();
     expect(screen.getByLabelText('医生姓名')).toHaveAttribute('aria-invalid', 'false');
+
+    fireEvent.change(screen.getByLabelText('关注范围'), { target: { value: 'title' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
+    expect(screen.getByText('请至少填写一个职称。')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('职称'), { target: { value: '，,   ，' } });
+    expect(screen.getByText('请至少填写一个职称。')).toBeInTheDocument();
+    expect(screen.getByLabelText('职称')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('职称'), { target: { value: '主任医师， , 副主任医师' } });
+    expect(screen.queryByText('请至少填写一个职称。')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('职称')).toHaveAttribute('aria-invalid', 'false');
+
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-26' } });
+    expect(screen.getByText('不能选择今天之前的日期。')).toBeInTheDocument();
+    expect(screen.getByLabelText('开始日期')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
+    expect(screen.queryByText('不能选择今天之前的日期。')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('开始日期')).toHaveAttribute('aria-invalid', 'false');
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-27' } });
+    expect(screen.getByText('结束日期不能早于开始日期。')).toBeInTheDocument();
+    expect(screen.getByLabelText('结束日期')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-27' } });
+    expect(screen.queryByText('结束日期不能早于开始日期。')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('结束日期')).toHaveAttribute('aria-invalid', 'false');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some((call) => call[1]?.method === 'POST')).toBe(false);
 
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-11' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
+    expect(screen.getByText('最多可选择北京时间今天起 14 天内的日期。')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-10' } });
     expect(screen.getByText('日期范围最多为连续 14 天。')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some((call) => call[1]?.method === 'POST')).toBe(false);
   });

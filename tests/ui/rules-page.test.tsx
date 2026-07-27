@@ -64,6 +64,9 @@ describe('规则与日历', () => {
     expect(supplement).toHaveTextContent('本产品未据此安排提醒');
     expect(screen.getAllByText('08:00')).toHaveLength(15);
     expect(document.querySelectorAll('time[datetime]')).toHaveLength(14);
+    expect(screen.getAllByRole('listitem', {
+      name: /^提醒日期 .+、提醒时间 08:00、目标就诊日期 .+$/,
+    })).toHaveLength(14);
     expect(screen.getByRole('link', { name: '查看医院规则说明（新标签页打开）' })).toHaveAttribute(
       'href',
       rule.officialEntryUrl,
@@ -93,5 +96,8 @@ describe('规则与日历', () => {
     const firstDate = document.querySelector('time');
     expect(firstDate).toHaveAttribute('datetime', '2026-07-19');
     expect(firstDate).toHaveTextContent('7月19日');
+    expect(screen.getByRole('listitem', {
+      name: '提醒日期 7月19日周日、提醒时间 08:00、目标就诊日期 7月26日周日',
+    })).toBeInTheDocument();
   });
 });
