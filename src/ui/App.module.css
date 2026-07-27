@@ -55,16 +55,46 @@
 
 .localState {
   display: inline-flex;
-  min-height: 40px;
+  min-height: 44px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.accessBoundary {
+  color: var(--ink-muted);
+}
+
+.healthState {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.healthStateHealthy {
+  color: var(--success);
 }
 
 .localDot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+}
+
+.localDotHealthy {
   background: var(--success);
+}
+
+.localDotAction {
+  background: var(--warning);
+}
+
+.localDotUnknown {
+  background: var(--ink-muted);
 }
 
 .navWrap {
@@ -137,8 +167,20 @@
     min-height: 68px;
   }
 
-  .brandMeta {
-    display: none;
+  .headerInner {
+    min-height: 78px;
+    gap: 12px;
+  }
+
+  .brandName {
+    font-size: 17px;
+  }
+
+  .nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    overflow-x: visible;
   }
 
   .main {
@@ -146,7 +188,12 @@
   }
 
   .navLink {
+    min-width: 0;
     min-height: 44px;
+    padding: 9px 5px;
+    justify-content: center;
+    border-radius: 0;
+    white-space: nowrap;
   }
 }
 

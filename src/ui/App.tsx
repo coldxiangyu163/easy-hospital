@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 
 import styles from './App.module.css';
+import { api } from './api.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { NotificationsPage } from './pages/NotificationsPage.js';
 import { NowPage } from './pages/NowPage.js';
@@ -35,11 +36,37 @@ function routeLabel(pathname: string): string {
   return '页面未找到';
 }
 
+type HeaderHealth = 'checking' | 'healthy' | 'action' | 'unknown';
+
 export function App() {
   const location = useLocation();
+  const [headerHealth, setHeaderHealth] = useState<HeaderHealth>('checking');
   const mainRef = useRef<HTMLElement>(null);
   const navRef = useRef<HTMLElement>(null);
   const previousPath = useRef(location.pathname);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setHeaderHealth('checking');
+    Promise.all([api.health(controller.signal), api.runtimeStatus(controller.signal)]).then(
+      ([health, runtime]) => {
+        const fullyHealthy =
+          health.status === 'healthy' &&
+          health.checks.storage?.status === 'healthy' &&
+          health.checks.worker?.status === 'healthy' &&
+          health.checks.worker.running === true &&
+          runtime.sqlite.status === 'healthy' &&
+          runtime.worker.status === 'healthy' &&
+          runtime.worker.running;
+        setHeaderHealth(fullyHealthy ? 'healthy' : 'action');
+      },
+      (error: unknown) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setHeaderHealth('unknown');
+      },
+    );
+    return () => controller.abort();
+  }, [location.pathname]);
 
   useEffect(() => {
     document.title = `${routeLabel(location.pathname)} · 北京挂号雷达`;
@@ -72,12 +99,28 @@ export function App() {
             <span className={styles.brandMeta}>只提醒，不代预约</span>
           </NavLink>
           <span className={styles.localState}>
-            <span className={styles.localDot} aria-hidden="true" />
-            本机运行
+            <span className={styles.accessBoundary}>仅本机访问</span>
+            <span className={`${styles.healthState} ${headerHealth === 'healthy' ? styles.healthStateHealthy : ''}`} role="status" aria-live="polite">
+              <span
+                className={`${styles.localDot} ${
+                  headerHealth === 'healthy'
+                    ? styles.localDotHealthy
+                    : headerHealth === 'action'
+                      ? styles.localDotAction
+                      : styles.localDotUnknown
+                }`}
+                aria-hidden="true"
+              />
+              {headerHealth === 'healthy'
+                ? '运行正常'
+                : headerHealth === 'action'
+                  ? '需要处理'
+                  : '状态未知'}
+            </span>
           </span>
         </div>
         <div className={styles.navWrap}>
-          <nav ref={navRef} className={styles.nav} aria-label="主要导航，可横向滚动">
+          <nav ref={navRef} className={styles.nav} aria-label="主要导航，六个入口">
             {navigation.map((item) => (
               <NavLink
                 key={item.to}

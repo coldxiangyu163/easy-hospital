@@ -214,8 +214,20 @@ describe('创建关注任务', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '新增一件关注' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: '关注对象' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: '匹配条件' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: '目标就诊日期与时段' })).toBeInTheDocument();
     expect(screen.getByText('稳定公开排班来源')).toBeInTheDocument();
     expect(screen.queryByLabelText(/实验性 B 级/)).not.toBeInTheDocument();
+    const technicalDetails = screen.getByText('技术详情').closest('details');
+    expect(technicalDetails).not.toHaveAttribute('open');
+    expect(technicalDetails).toHaveTextContent('target-pumch-dermatology');
+    expect(technicalDetails).toHaveTextContent('source-pumch-public-schedule');
+    expect(screen.getByRole('heading', { name: '这项提醒会怎样工作' })).toBeInTheDocument();
+    expect(screen.getByText(/日期是希望就诊的目标日期/)).toBeInTheDocument();
+    expect(screen.getByText(/首次检查只建立 baseline，不会补发已有排班/)).toBeInTheDocument();
+    expect(screen.getByText(/不监测实时余号或退号，也不会自动预约/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '打开北京协和医院官网（不是预约入口，新标签页打开）' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
     fireEvent.change(screen.getByLabelText('时段'), { target: { value: 'AM' } });
@@ -268,6 +280,7 @@ describe('创建关注任务', () => {
     expect(screen.queryByLabelText('关注范围')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('时段')).not.toBeInTheDocument();
     expect(screen.getByText('规则提醒')).toBeInTheDocument();
+    expect(screen.getByText(/规则提醒会按规则时间发送；规则标记为需复核时/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
@@ -308,7 +321,8 @@ describe('创建关注任务', () => {
     expect(screen.getByText('仅目录，待可靠公开来源')).toBeInTheDocument();
     expect(screen.queryByLabelText('开始日期')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
-    expect(screen.getByRole('link', { name: '打开北京积水潭医院官网（新标签页打开）' }))
+    expect(screen.getByText('当前不能创建提醒：这个科室还没有可可靠检查的公开排班或已确认规则。')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '打开北京积水潭医院官网（不是预约入口，新标签页打开）' }))
       .toHaveAttribute('href', 'https://www.jst-hosp.com.cn/');
   });
 
@@ -331,7 +345,7 @@ describe('创建关注任务', () => {
     fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-anzhen' } });
     expect(screen.getByLabelText('科室')).toHaveValue('department-anzhen-coronary-heart-disease-center');
     expect(screen.getByText('实验性公开排班来源')).toBeInTheDocument();
-    expect(screen.getByText('source-anzhen-public-heart-center-schedule')).toBeInTheDocument();
+    expect(screen.getByText('技术详情').closest('details')).toHaveTextContent('source-anzhen-public-heart-center-schedule');
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeEnabled();
 
     fireEvent.change(screen.getByLabelText('科室'), { target: { value: 'department-anzhen-arrhythmia-center' } });
@@ -361,11 +375,28 @@ describe('创建关注任务', () => {
     await screen.findByRole('heading', { name: '新增一件关注' });
     expect(screen.getByLabelText('开始日期')).toHaveAttribute('min', '2026-07-27');
     expect(screen.getByLabelText('开始日期')).toHaveAttribute('max', '2026-08-10');
+    fireEvent.change(screen.getByLabelText('关注范围'), { target: { value: 'doctor' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
+    expect(screen.getByText('请填写医生姓名。')).toBeInTheDocument();
+    expect(screen.getByLabelText('医生姓名')).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByText('请选择开始日期。')).toBeInTheDocument();
+    expect(screen.getByLabelText('开始日期')).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByText('请选择结束日期。')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('请修正下面标出的内容后再提交。');
 
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
+    expect(screen.queryByText('请选择开始日期。')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('开始日期')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
+    expect(screen.queryByText('请选择结束日期。')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('医生姓名'), { target: { value: '张医生' } });
+    expect(screen.queryByText('请填写医生姓名。')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('医生姓名')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some((call) => call[1]?.method === 'POST')).toBe(false);
+
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-11' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
     expect(screen.getByText('日期范围最多为连续 14 天。')).toBeInTheDocument();

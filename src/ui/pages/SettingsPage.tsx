@@ -16,11 +16,34 @@ const notificationReasonLabel = (reason: string | null): string => {
   return '本机配置不完整';
 };
 
+const notificationLabels = (key: string): { name: string; testName: string } => {
+  if (key === 'macos') return { name: 'macOS 本机通知', testName: 'macOS' };
+  if (key === 'bark') return { name: 'Bark', testName: 'Bark' };
+  if (key === 'smtp') return { name: 'SMTP', testName: 'SMTP' };
+  return { name: key, testName: key };
+};
+
+function beijingTimestamp(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
+}
+
 export function SettingsPage() {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<SettingsState>({ status: 'loading' });
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [channelTests, setChannelTests] = useState<Record<string, NotificationSelfTest | 'error'>>({});
+  const [completedCheck, setCompletedCheck] = useState<{ display: string; iso: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -30,7 +53,13 @@ export function SettingsPage() {
       api.catalog(controller.signal),
       api.runtimeStatus(controller.signal),
     ]).then(
-      ([health, catalog, runtime]) => setState({ status: 'loaded', health, catalog, runtime }),
+      ([health, catalog, runtime]) => {
+        setState({ status: 'loaded', health, catalog, runtime });
+        if (attempt > 0) {
+          const checkedAt = new Date();
+          setCompletedCheck({ display: beijingTimestamp(checkedAt), iso: checkedAt.toISOString() });
+        }
+      },
       (error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         setState({ status: 'error' });
@@ -84,16 +113,13 @@ export function SettingsPage() {
 
   return (
     <>
-      <header className={styles.pageHeaderWithAction}>
-        <div>
-          <p className={styles.eyebrow}>首次配置 / 本机设置</p>
-          <h1 className={styles.pageTitle}>先确认这台电脑已经准备好</h1>
-          <p className={styles.pageLead}>只显示本机 API 能证明的状态。目录只显示脱敏尾段，密钥和浏览器会话不会出现在页面中。</p>
-        </div>
-        <button className={styles.secondaryButton} type="button" onClick={() => setAttempt((value) => value + 1)}>重新运行本机检查</button>
+      <header className={styles.pageHeader}>
+        <p className={styles.eyebrow}>首次配置 / 本机设置</p>
+        <h1 className={styles.pageTitle}>先确认这台电脑已经准备好</h1>
+        <p className={styles.pageLead}>只显示本机 API 能证明的状态。目录只显示脱敏尾段，密钥和浏览器会话不会出现在页面中。</p>
       </header>
 
-      <div className={styles.setupGrid} aria-label="首次配置状态">
+      <div className={styles.setupGrid} aria-label="当前状态摘要">
         <section className={coreHealthy ? styles.setupSummaryGood : styles.setupSummaryWarning}>
           <div>
             <span>核心本机服务</span>
@@ -110,7 +136,9 @@ export function SettingsPage() {
         </section>
       </div>
 
-      <section className={styles.settingsList} aria-label="本机配置检查">
+      <section className={styles.settingsSection} aria-labelledby="settings-detail-title">
+        <h2 id="settings-detail-title" className={styles.sectionTitle}>详细状态</h2>
+        <div className={styles.settingsList} aria-label="本机配置检查">
         <article className={styles.settingsRow}>
           <div><h2>访问边界</h2><p>管理端固定在本机回环地址，不支持公网或局域网暴露。</p></div>
           <span className={styles.statusGood}>仅允许 127.0.0.1</span>
@@ -125,11 +153,11 @@ export function SettingsPage() {
         </article>
         {state.runtime.notifications.map((channel) => {
           const result = channelTests[channel.key];
-          const label = channel.key === 'macos' ? 'macOS 本机通知' : channel.key === 'bark' ? 'Bark' : channel.key === 'smtp' ? 'SMTP' : channel.key;
+          const label = notificationLabels(channel.key);
           return (
             <article className={styles.settingsRow} key={channel.key}>
               <div>
-                <h2>{label}</h2>
+                <h2>{label.name}</h2>
                 <p>{channel.enabled ? '已从本机运行配置启用。自检只发送明确标记的测试消息。' : `当前已禁用：${notificationReasonLabel(channel.reason)}`}</p>
                 {result === 'error' ? <p className={styles.inlineError} role="alert">自检请求失败，请确认本机服务后重试。</p> : null}
                 {result && result !== 'error' && result.status === 'accepted' ? <p className={styles.inlineSuccess} role="status" aria-label="渠道已接受测试消息，请在接收端确认。">渠道已接受测试消息，请在接收端确认。</p> : null}
@@ -140,31 +168,47 @@ export function SettingsPage() {
                 <span className={channel.enabled ? styles.statusGood : styles.statusMuted}>{channel.enabled ? '已启用' : '未配置'}</span>
                 {channel.enabled ? (
                   <button className={styles.secondaryButton} type="button" disabled={testingChannel === channel.key} onClick={() => void runChannelTest(channel.key)}>
-                    {testingChannel === channel.key ? '正在发送…' : `发送 ${channel.key} 自检`}
+                    {testingChannel === channel.key ? `正在发送 ${label.testName} 测试通知…` : `发送 ${label.testName} 测试通知`}
                   </button>
                 ) : null}
               </div>
             </article>
           );
         })}
-        <article className={styles.settingsRow}>
-          <div><h2>B 级 Browser Agent</h2><p>{state.runtime.browserAgent.lastSeenAt ? `最近连接：${new Date(state.runtime.browserAgent.lastSeenAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}` : '尚无本机浏览器连接记录。医院 Cookie 与会话 Token 不离开浏览器；配对 token 仅用于本机 HMAC 验证。'}</p></div>
-          <span className={state.runtime.browserAgent.configured ? styles.statusGood : styles.statusMuted}>{state.runtime.browserAgent.configured ? '已配置' : '未配置'}</span>
-        </article>
-        <article className={styles.settingsRow}>
-          <div><h2>Capture 测试渠道</h2><p>Capture 只记录本地通知，不代表真实送达</p></div>
-          <span className={styles.statusMuted}>仅测试 / 本地记录</span>
-        </article>
-        <article className={styles.settingsRow}>
-          <div><h2>开源版运行方式</h2><p>单机、单进程、SQLite 持久化。不要把端口或含密钥的配置提交到公开仓库。</p></div>
-          <span className={styles.statusGood}>不使用 Docker</span>
-        </article>
+        </div>
+
+        <details className={styles.settingsTechnicalDetails}>
+          <summary>技术详情</summary>
+          <div className={styles.settingsList}>
+            <article className={styles.settingsRow}>
+              <div><h2>B 级 Browser Agent</h2><p>{state.runtime.browserAgent.lastSeenAt ? `最近连接：${new Date(state.runtime.browserAgent.lastSeenAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}` : '尚无本机浏览器连接记录。医院 Cookie 与会话 Token 不离开浏览器；配对 token 仅用于本机 HMAC 验证。'}</p></div>
+              <span className={state.runtime.browserAgent.configured ? styles.statusGood : styles.statusMuted}>{state.runtime.browserAgent.configured ? '已配置' : '未配置'}</span>
+            </article>
+            <article className={styles.settingsRow}>
+              <div><h2>Capture 测试渠道</h2><p>Capture 只记录本地通知，不代表真实送达</p></div>
+              <span className={styles.statusMuted}>仅测试 / 本地记录</span>
+            </article>
+            <article className={styles.settingsRow}>
+              <div><h2>开源版运行方式</h2><p>单机、单进程、SQLite 持久化。不要把端口或含密钥的配置提交到公开仓库。</p></div>
+              <span className={styles.statusGood}>不使用 Docker</span>
+            </article>
+          </div>
+        </details>
       </section>
 
       <aside className={styles.boundaryNote}>
         <strong>本机运行不等于离线运行</strong>
         <p>访问医院公开来源和真实通知服务仍需要网络。产品不会上传医院 Cookie、Token、身份证或医保卡。</p>
       </aside>
+
+      <section className={styles.recheckSection} aria-label="重新检查本机状态">
+        <div>
+          <h2>重新检查本机状态</h2>
+          <p>配置变化后可手动刷新上面的当前状态。</p>
+          {completedCheck ? <p className={styles.inlineSuccess} role="status" aria-label={`检查完成：${completedCheck.display}（北京时间）`}>检查完成：<time dateTime={completedCheck.iso}>{completedCheck.display}</time>（北京时间）</p> : null}
+        </div>
+        <button className={styles.secondaryButton} type="button" onClick={() => { setCompletedCheck(null); setAttempt((value) => value + 1); }}>重新检查</button>
+      </section>
 
       <div className={styles.actions}>
         <Link className={styles.primaryButton} to="/tasks/new">创建关注任务</Link>
