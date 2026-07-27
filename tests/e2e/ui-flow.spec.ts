@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, test, type Page } from '@playwright/test';
@@ -61,6 +61,13 @@ test('创建关注并浏览规则、来源与本机设置，无 pageerror 和真
 
   await page.getByRole('link', { name: '创建关注任务' }).click();
   await expect(page.getByRole('heading', { name: '新增一件关注' })).toBeVisible();
+  await expect(page.getByLabel('医院').locator('option')).toHaveCount(11);
+  await page.getByLabel('医院').selectOption('hospital-jishuitan');
+  await expect(page.getByText('仅目录，待可靠公开来源')).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
+  await expect(page.getByRole('link', { name: /打开北京积水潭医院官网.*新标签页打开/ }))
+    .toHaveAttribute('href', 'https://www.jst-hosp.com.cn/');
+  await page.getByLabel('医院').selectOption('hospital-pumch');
   await page.getByLabel('开始日期').fill(futureDate(1));
   await page.getByLabel('结束日期').fill(futureDate(7));
   await page.getByLabel('时段').selectOption('AM');
@@ -73,12 +80,17 @@ test('创建关注并浏览规则、来源与本机设置，无 pageerror 和真
   await expect(page.getByRole('heading', { name: '你正在关注的事' })).toBeVisible();
 
   await page.getByRole('link', { name: '规则与日历', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /什么时候值得看|还没有已记录的放号规则/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /什么时候值得看|还没有与 catalog target 精确匹配的规则/ })).toBeVisible();
   await page.screenshot({ path: screenshotPath('rules-1280.png'), fullPage: true });
 
   await page.getByRole('link', { name: '数据来源', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '数据从哪里来' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '运行 A 级来源自检' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '11 家医院，逐个 target 说明能力' })).toBeVisible();
+  const pumchProbe = page.getByRole('button', {
+    name: '自检 北京协和医院 东单院区 皮肤科 公开来源',
+  });
+  await expect(pumchProbe).toBeVisible();
+  await expect(pumchProbe).toHaveText('运行公开来源自检');
+  // 只确认正式 adapter manifest 已装配，不点击来源自检，避免测试主动发起外站读取。
   await page.screenshot({ path: screenshotPath('sources-1280.png'), fullPage: true });
 
   await page.getByRole('link', { name: '本机设置', exact: true }).click();
@@ -92,18 +104,42 @@ test('创建关注并浏览规则、来源与本机设置，无 pageerror 和真
   await expect(page.getByRole('heading', { name: '下一步：核对最近规则' })).toBeVisible();
   await page.screenshot({ path: screenshotPath('now-with-task-375.png'), fullPage: true });
 
+  await page.getByRole('link', { name: '关注任务', exact: true }).click();
+  await page.getByRole('link', { name: '新增关注' }).click();
+  const hospitalSelect = page.getByRole('combobox', { name: '医院', exact: true });
+  const campusSelect = page.getByRole('combobox', { name: '院区', exact: true });
+  const departmentSelect = page.getByRole('combobox', { name: '科室', exact: true });
+  await hospitalSelect.selectOption('hospital-cicams');
+  await expect(hospitalSelect).toHaveValue('hospital-cicams');
+  await expect(campusSelect).toHaveValue('campus-cicams-beijing');
+  await expect(departmentSelect).toHaveValue('department-cicams-thoracic-surgery');
+  await expect(page.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
+  await page.screenshot({ path: screenshotPath('catalog-directory-375.png'), fullPage: true });
+
   expect(pageErrors).toEqual([]);
   expect(externalRequests).toEqual([]);
 });
 
-test('E2E 服务器未装配任何真实通知渠道与 Browser Agent 配对', async ({ request }) => {
-  // 可验证断言：webServer 环境变量置空 + server-guard.mjs 必须让三条通知渠道全部
-  // 处于禁用态。任何一条防线失效（例如本机 .env 中的真实凭据上膛）都会让此用例变红。
+test('E2E 装配精确 PUMCH binding，同时禁止服务器真实外联与通知配对', async ({ request }, testInfo) => {
+  // 正式来源 manifest 必须装配，才能覆盖 B2 的精确 runtime binding 准入；真实通知
+  // 凭据仍全部置空，服务器 fetch 则由 server-guard.mjs 限定为 loopback-only。
   const response = await request.get('/api/runtime-status');
   expect(response.ok()).toBe(true);
   const body = (await response.json()) as {
     notifications: Array<{ key: string; enabled: boolean; reason: string | null }>;
     browserAgent: { configured: boolean };
+    sourceCapabilities: Array<{
+      key: string;
+      sourceId?: string | null;
+      enabled: boolean;
+      stability?: string | null;
+      bindings?: Array<{
+        targetId: string;
+        hospitalId: string;
+        campusId: string;
+        departmentId: string;
+      }>;
+    }>;
   };
   expect(body.notifications.length).toBeGreaterThan(0);
   for (const channel of body.notifications) {
@@ -111,6 +147,41 @@ test('E2E 服务器未装配任何真实通知渠道与 Browser Agent 配对', a
     expect(channel.reason, `E2E 中通知渠道 ${channel.key} 必须给出禁用原因`).not.toBeNull();
   }
   expect(body.browserAgent.configured).toBe(false);
+
+  const pumchSource = body.sourceCapabilities.find(
+    (source) => source.key === 'pumch-public-dermatology-schedule',
+  );
+  expect(pumchSource).toMatchObject({
+    sourceId: 'source-pumch-public-schedule',
+    enabled: true,
+    stability: 'stable',
+    bindings: [
+      {
+        targetId: 'target-pumch-dermatology',
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+      },
+    ],
+  });
+
+  const guardStateFile = testInfo.config.metadata.e2eServerGuardStateFile;
+  expect(typeof guardStateFile).toBe('string');
+  if (typeof guardStateFile !== 'string') throw new Error('缺少 E2E server guard 状态文件路径');
+  type GuardState = {
+    policy: string;
+    passedThroughNonLoopbackFetches: number;
+    blockedNonLoopbackFetches: number;
+  };
+  const readGuardState = async (): Promise<GuardState> =>
+    JSON.parse(await readFile(guardStateFile, 'utf8')) as GuardState;
+
+  // 首个流程创建 PUMCH 任务后会触发后台来源检查。等待守卫确实在原始 fetch 前
+  // 捕获该非 loopback 尝试，再确认没有任何非 loopback 请求被放行。
+  await expect.poll(async () => (await readGuardState()).blockedNonLoopbackFetches).toBeGreaterThan(0);
+  const guardState = await readGuardState();
+  expect(guardState.policy).toBe('loopback-only');
+  expect(guardState.passedThroughNonLoopbackFetches).toBe(0);
 });
 
 test('首次 Tab 落在「跳到主要内容」，激活后焦点进入主区域', async ({ page }) => {
@@ -128,7 +199,7 @@ test('首次 Tab 落在「跳到主要内容」，激活后焦点进入主区域
   await expect(page.locator('#main-content')).toBeFocused();
 });
 
-test('C 级任务显示规则提醒语义，A 级任务保持监控语义', async ({ page }) => {
+test('rules-only 任务显示规则提醒语义，public-source 任务保持排班关注语义', async ({ page }) => {
   await clearWatchTasks(page);
   await page.goto('/');
 
@@ -148,7 +219,7 @@ test('C 级任务显示规则提醒语义，A 级任务保持监控语义', asyn
     page.getByText('规则提醒运行中，目前没有新的变化事件。可以核对放号时间和最后核验日期。'),
   ).toBeVisible();
 
-  // 加入 A 级任务后：A 行保持“监控中”，首页恢复监控语义
+  // 加入公开排班任务后：列表与首页只使用排班关注语义，不扩大为实时号源监控
   await createWatchTask(page, {
     hospitalId: 'hospital-pumch',
     campusId: 'campus-pumch-dongdan',
@@ -156,11 +227,11 @@ test('C 级任务显示规则提醒语义，A 级任务保持监控语义', asyn
   });
   await page.goto('/tasks');
   const aRow = page.locator('article').filter({ hasText: '北京协和医院' });
-  await expect(aRow.getByText('监控中')).toBeVisible();
+  await expect(aRow.getByText('公开排班关注已启用')).toBeVisible();
 
   await page.goto('/');
   await expect(
-    page.getByText('监控正在运行，目前没有新的变化事件。可以核对放号时间和最后核验日期。'),
+    page.getByText('公开排班关注正在运行，目前没有新的变化事件。可以核对来源状态和最后成功时间。'),
   ).toBeVisible();
 });
 

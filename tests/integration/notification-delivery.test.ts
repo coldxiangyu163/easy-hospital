@@ -6,9 +6,27 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import type { NotificationChannel, NotificationMessage } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
-import { buildApp } from '../../src/server/app.js';
+import {
+  buildApp as buildBaseApp,
+  type BuildAppOptions,
+} from '../../src/server/app.js';
+
+const pumchAdmissionAdapter: SourceAdapter = {
+  manifest: pumchDermatologyScheduleManifest,
+  async check() {
+    throw new Error('通知 seam 测试不应运行准入 Adapter');
+  },
+};
+
+const buildApp = (options: BuildAppOptions) =>
+  buildBaseApp({
+    ...options,
+    sourceAdapters: [...(options.sourceAdapters ?? []), pumchAdmissionAdapter],
+    browserAgentToken: 'notification-delivery-browser-agent-token',
+  });
 
 describe('Outbox 到 NotificationChannel 的纵向切片', () => {
   let app: FastifyInstance | undefined;

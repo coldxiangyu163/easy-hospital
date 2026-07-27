@@ -108,7 +108,7 @@ RADAR_TIMEZONE=Asia/Shanghai
 - 无 `Origin` 的本机 CLI 请求保留给 `curl` 等非浏览器客户端，但仍受 loopback Host、输入 schema、catalog 和来源政策校验；这不代表可以通过反向代理暴露服务。
 - Browser Agent observation 使用独立的 `chrome-extension://` Origin、nonce/HMAC 和 Bearer 配对契约，不使用 `x-easy-hospital-client: web` 代替扩展认证。
 - 创建任务，以及修改日期或重新启用任务时，`dateFrom`/`dateTo` 必须同时满足：落在**北京时间今天到今天加 14 天（含两端）**，且从开始日期到结束日期**连续最多 14 个自然日**；任一条件不满足都返回 `400 VALIDATION_ERROR`。
-- 同仁崇文门鼻科是 C 级规则提醒。管理端提交前会规范化为 `matchMode=any_expert`、`doctorName=null`、空职称、`session=ANY`、仅 `schedule_released`，并要求非空的 `remindBeforeMinutes`。API 不会替第三方调用者静默改写：创建或编辑结果不符合上述规范时返回 `400 SOURCE_POLICY_VIOLATION`。
+- 同仁崇文门鼻科是 `rules-only`。管理端提交前会规范化为 `matchMode=any_expert`、`doctorName=null`、空职称、`session=ANY`、仅 `schedule_released`，并要求非空的 `remindBeforeMinutes`。其余 `directory-only` target 不允许创建/恢复任务。API 不会替第三方调用者静默改写：创建或编辑结果不符合 target support 时返回 `400 SOURCE_POLICY_VIOLATION`。
 
 ### 测试与 CI 来源隔离
 
@@ -257,7 +257,7 @@ npm start
 
 1. 在任何 migration 前运行 SQLite `integrity_check`。失败时抛出稳定错误“数据库完整性检查失败，原数据库未被修改”，关闭连接并保留原文件，不创建替代库，也不自动恢复。
 2. 验证全部已应用 migration 的连续 version、固定 name 和 SHA-256 checksum。migration 16 为 1–15 建立 checksum 基线，migration 17 `hospital-domain-policy` 新增 `hospital_domain` 作为域政策单一事实源：`officialEntryUrl` 只允许该医院登记的 `official` kind，`sourceUrl` 只允许登记的 `evidence` kind；同一官方域如也作为证据来源，会分别登记两种 kind。未登记域的医院或 URL fail closed。之后历史 migration SQL 被改写，或 `schema_migration` 的 name/checksum 被篡改，都会 fail closed。
-3. 若已有磁盘库存在 pending migration，使用同步 `VACUUM INTO` 在 `<RADAR_DATA_DIR>/backups/` 创建迁移前一致性备份，重新以只读方式打开备份并通过 `integrity_check` 与 migration manifest 验证后才迁移。v0.1.1 候选至少演练一次 v16 → v17 的备份、迁移、重启与恢复。
+3. 若已有磁盘库存在 pending migration，使用同步 `VACUUM INTO` 在 `<RADAR_DATA_DIR>/backups/` 创建迁移前一致性备份，重新以只读方式打开备份并通过 `integrity_check` 与 migration manifest 验证后才迁移。包含目录扩展的候选至少演练一次 v17 → v18 的备份、迁移、重启与恢复，并保留 migration 14 真实旧 catalog schema 的兼容测试。
 4. 所有 pending migration 在同一事务中执行，完成后再次运行 `integrity_check`。
 
 新建数据库和 `:memory:` 数据库不创建迁移备份。自动迁移备份按修改时间只保留最近 5 份；它们是升级保护，不代替独立的长期停机备份。

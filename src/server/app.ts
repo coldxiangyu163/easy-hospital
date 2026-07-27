@@ -16,7 +16,10 @@ import {
 import { releaseRuleInputSchema, releaseRulePatchSchema } from '../core/release-rule.js';
 import {
   checkRequestSchema,
+  findSourceBinding,
+  isBoundSourceManifest,
   runSourceAdapter,
+  sourceRateLimitKey,
   type SourceAdapter,
 } from '../core/source-adapter.js';
 import {
@@ -29,7 +32,8 @@ import {
   getLatestBrowserAgentSeenAt,
   recordBrowserAgentIngest,
 } from '../storage/browser-agent.js';
-import { openDatabase, readCatalog, type SqliteDatabase } from '../storage/database.js';
+import { readCatalog } from '../storage/catalog.js';
+import { openDatabase } from '../storage/database.js';
 import { SqliteJobRunner } from '../storage/job-runner.js';
 import {
   applyCheckResult,
@@ -67,6 +71,7 @@ import {
   updateWatchTask,
 } from '../storage/watch-tasks.js';
 import { LocalWorker } from './local-worker.js';
+import { TargetSupportRegistry } from './support-registry.js';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
@@ -132,52 +137,6 @@ const RULE_RESCHEDULE_FIELDS = [
   'officialEntryUrl',
   'enabled',
 ] as const;
-
-// 写入前预校验 catalog 范围，把非法 hospital/campus/department 稳定映射为 400，
-// 避免依赖 SQLite FOREIGN KEY 约束失败（会变成 500）。
-function catalogScopeExists(
-  database: SqliteDatabase,
-  scope: { hospitalId: string; campusId: string | null; departmentId: string },
-): boolean {
-  const row =
-    scope.campusId === null
-      ? database
-          .prepare('SELECT 1 AS found FROM department WHERE id = ? AND hospital_id = ?')
-          .get(scope.departmentId, scope.hospitalId)
-      : database
-          .prepare(
-            'SELECT 1 AS found FROM department WHERE id = ? AND hospital_id = ? AND campus_id = ?',
-          )
-          .get(scope.departmentId, scope.hospitalId, scope.campusId);
-  return row !== undefined;
-}
-
-function watchTaskPolicyAllows(input: {
-  hospitalId: string;
-  departmentId: string;
-  matchMode: 'any_expert' | 'title' | 'doctor';
-  doctorName: string | null;
-  titles: string[];
-  session: 'ANY' | 'AM' | 'PM';
-  eventTypes: string[];
-  remindBeforeMinutes: number | null;
-}): boolean {
-  if (
-    input.hospitalId !== 'hospital-tongren' ||
-    input.departmentId !== 'department-tongren-rhinology'
-  ) {
-    return true;
-  }
-  return (
-    input.matchMode === 'any_expert' &&
-    input.doctorName === null &&
-    input.titles.length === 0 &&
-    input.session === 'ANY' &&
-    input.eventTypes.length === 1 &&
-    input.eventTypes[0] === 'schedule_released' &&
-    input.remindBeforeMinutes !== null
-  );
-}
 
 export type NotificationChannelStatus = {
   key: string;
@@ -247,6 +206,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const sourceAdapters = new Map(
     (options.sourceAdapters ?? []).map((adapter) => [adapter.manifest.adapterKey, adapter]),
   );
+  const supportRegistry = new TargetSupportRegistry(
+    database,
+    [...sourceAdapters.values()],
+    Boolean(options.browserAgentToken),
+  );
   const notificationChannels = new Map(
     (options.notificationChannels ?? []).map((channel) => [channel.key, channel]),
   );
@@ -258,37 +222,58 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       reason: null,
     }));
   const sourceCapabilities = [
-    ...[...sourceAdapters.values()].map((adapter) => ({
-      key: adapter.manifest.adapterKey,
-      accessClass: adapter.manifest.accessClass,
-      enabled: true,
-      transport: adapter.manifest.transport,
-      minIntervalMs: adapter.manifest.minIntervalMs,
-      capabilities:
-        adapter.manifest.adapterKey === 'pumch-public-dermatology-schedule'
-          ? { schedule: true, availability: false, cancellation: false, ruleReminder: false }
+    ...[...sourceAdapters.values()].map((adapter) => {
+      const manifest = adapter.manifest;
+      const bound = isBoundSourceManifest(manifest);
+      return {
+        key: manifest.adapterKey,
+        sourceId: bound ? manifest.sourceId : null,
+        accessClass: manifest.accessClass,
+        enabled: true,
+        transport: manifest.transport,
+        minIntervalMs: manifest.minIntervalMs,
+        stability: bound ? manifest.stability : null,
+        eventTypes: bound ? manifest.eventTypes : null,
+        bindings: bound ? manifest.bindings : [],
+        rateLimitKey: bound ? manifest.rateLimitKey : manifest.adapterKey,
+        capabilities: bound
+          ? {
+              schedule: manifest.eventTypes.includes('schedule_released'),
+              availability: false,
+              cancellation: false,
+              ruleReminder: false,
+            }
           : { schedule: true, availability: true, cancellation: true, ruleReminder: false },
-    })),
+      };
+    }),
     {
       key: 'browser-agent',
+      rateLimitKey: 'browser-agent',
       accessClass: 'B' as const,
       enabled: Boolean(options.browserAgentToken),
       transport: 'local-agent',
       minIntervalMs: 300_000,
       capabilities: { schedule: false, availability: true, cancellation: true, ruleReminder: false },
     },
-    {
-      key: 'tongren-rhinology-rules',
+    ...supportRegistry.listRuleOnlyTargetIds().map((targetId) => ({
+      key: `rules-only:${targetId}`,
+      rateLimitKey: `rules-only:${targetId}`,
+      targetId,
       accessClass: 'C' as const,
       enabled: true,
       transport: 'rules-only',
       minIntervalMs: null,
-      capabilities: { schedule: false, availability: false, cancellation: false, ruleReminder: true },
-    },
+      capabilities: {
+        schedule: false,
+        availability: false,
+        cancellation: false,
+        ruleReminder: true,
+      },
+    })),
   ];
   const sourceCapabilitiesWithRuntime = () =>
     sourceCapabilities.map((capability) => {
-      const runtime = getSourceRuntime(database, capability.key);
+      const runtime = getSourceRuntime(database, capability.rateLimitKey);
       return {
         ...capability,
         runtime: runtime
@@ -410,8 +395,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     let checkRequest: unknown = request.body;
     if (
       (checkRequest === undefined || checkRequest === null) &&
-      adapterKey === 'pumch-public-dermatology-schedule'
+      isBoundSourceManifest(adapter.manifest)
     ) {
+      const binding = adapter.manifest.bindings[0]!;
       const beijingNow = new Date(checkedAt + 8 * 60 * 60 * 1_000);
       const formatDate = (date: Date): string =>
         [
@@ -423,10 +409,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       end.setUTCDate(end.getUTCDate() + 7);
       checkRequest = {
         requestId: randomUUID(),
-        sourceId: 'source-pumch-public-schedule',
-        hospitalId: 'hospital-pumch',
-        campusId: 'campus-pumch-dongdan',
-        departmentId: 'department-pumch-dermatology',
+        sourceId: adapter.manifest.sourceId,
+        hospitalId: binding.hospitalId,
+        campusId: binding.campusId,
+        departmentId: binding.departmentId,
         dateFrom: formatDate(beijingNow),
         dateTo: formatDate(end),
         doctorName: null,
@@ -440,16 +426,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return reply.code(400).send({ error: 'VALIDATION_ERROR', issues: parsed.error.issues });
     }
 
-    const retryAfterMs = sourceRetryAfterMs(database, adapterKey, checkedAt);
+    if (
+      isBoundSourceManifest(adapter.manifest) &&
+      (parsed.data.sourceId !== adapter.manifest.sourceId ||
+        !findSourceBinding(adapter.manifest, parsed.data))
+    ) {
+      return reply.code(400).send({ error: 'SOURCE_SCOPE_NOT_BOUND' });
+    }
+
+    const rateLimitKey = sourceRateLimitKey(adapter.manifest);
+    const retryAfterMs = sourceRetryAfterMs(database, rateLimitKey, checkedAt);
     if (retryAfterMs > 0) {
       return reply.code(429).send({ error: 'SOURCE_RATE_LIMITED', retryAfterMs });
     }
 
-    recordSourceAttempt(database, adapterKey, checkedAt, adapter.manifest.minIntervalMs);
+    recordSourceAttempt(database, rateLimitKey, checkedAt, adapter.manifest.minIntervalMs);
     const result = await runSourceAdapter(adapter, parsed.data);
     recordSourceResult(
       database,
-      adapterKey,
+      rateLimitKey,
       result,
       checkedAt + adapter.manifest.minIntervalMs,
     );
@@ -518,7 +513,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       });
     }
 
-    if (!catalogScopeExists(database, parsed.data)) {
+    if (!supportRegistry.resolveScope(parsed.data)) {
       return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
     }
     if (!hasOfficialRuleUrls(database, parsed.data)) {
@@ -548,7 +543,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const current = getReleaseRule(database, id);
     if (!current) return reply.code(404).send({ error: 'RELEASE_RULE_NOT_FOUND' });
     const merged = { ...current, ...parsed.data };
-    if (!catalogScopeExists(database, merged)) {
+    if (!supportRegistry.resolveScope(merged)) {
       return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
     }
     const urlBoundaryChanged = ['hospitalId', 'officialEntryUrl', 'sourceUrl'].some((key) =>
@@ -598,12 +593,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!parsed.success) {
       return reply.code(400).send({ error: 'VALIDATION_ERROR', issues: parsed.error.issues });
     }
-    if (!catalogScopeExists(database, parsed.data)) {
+    const target = supportRegistry.resolveScope(parsed.data);
+    if (!target) {
       return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
     }
-    if (enforceWatchTaskPolicy && !watchTaskPolicyAllows(parsed.data)) {
+    if (!target.support.canCreateWatchTask) {
       return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
     }
+    if (enforceWatchTaskPolicy && !supportRegistry.watchTaskAllowed(parsed.data)) {
+      return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
+    }
+    const admissionError = supportRegistry.enabledWatchTaskAdmissionError(parsed.data);
+    if (admissionError) return reply.code(400).send({ error: admissionError });
     if (enforceTaskDateWindow) {
       const issues = validateWatchTaskDateWindow(parsed.data, now());
       if (issues.length > 0) {
@@ -638,12 +639,20 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       campusId: parsed.data.campusId !== undefined ? parsed.data.campusId : current.campusId,
       departmentId: parsed.data.departmentId ?? current.departmentId,
     };
-    if (!catalogScopeExists(database, mergedScope)) {
+    const target = supportRegistry.resolveScope(mergedScope);
+    if (!target) {
       return reply.code(400).send({ error: 'CATALOG_SCOPE_NOT_FOUND' });
     }
     const mergedTask = { ...current, ...parsed.data };
-    if (enforceWatchTaskPolicy && !watchTaskPolicyAllows(mergedTask)) {
-      return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
+    if (mergedTask.enabled) {
+      if (!target.support.canCreateWatchTask) {
+        return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
+      }
+      if (enforceWatchTaskPolicy && !supportRegistry.watchTaskAllowed(mergedTask)) {
+        return reply.code(400).send({ error: 'SOURCE_POLICY_VIOLATION' });
+      }
+      const admissionError = supportRegistry.enabledWatchTaskAdmissionError(mergedTask);
+      if (admissionError) return reply.code(400).send({ error: admissionError });
     }
     if (
       enforceTaskDateWindow &&
@@ -788,20 +797,29 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return reply.code(400).send({ error: 'VALIDATION_ERROR', issues: parsed.error.issues });
     }
 
+    if (
+      isBoundSourceManifest(adapter.manifest) &&
+      (parsed.data.sourceId !== adapter.manifest.sourceId ||
+        !findSourceBinding(adapter.manifest, parsed.data))
+    ) {
+      return reply.code(400).send({ error: 'SOURCE_SCOPE_NOT_BOUND' });
+    }
+
     const checkedAt = now();
+    const rateLimitKey = sourceRateLimitKey(adapter.manifest);
     if (enforceSourceRateLimit) {
-      const retryAfterMs = sourceRetryAfterMs(database, adapterKey, checkedAt);
+      const retryAfterMs = sourceRetryAfterMs(database, rateLimitKey, checkedAt);
       if (retryAfterMs > 0) {
         return reply.code(429).send({ error: 'SOURCE_RATE_LIMITED', retryAfterMs });
       }
-      recordSourceAttempt(database, adapterKey, checkedAt, adapter.manifest.minIntervalMs);
+      recordSourceAttempt(database, rateLimitKey, checkedAt, adapter.manifest.minIntervalMs);
     }
 
     const result = await runSourceAdapter(adapter, parsed.data);
     if (enforceSourceRateLimit) {
       recordSourceResult(
         database,
-        adapterKey,
+        rateLimitKey,
         result,
         checkedAt + adapter.manifest.minIntervalMs,
       );

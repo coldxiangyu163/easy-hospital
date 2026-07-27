@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 
 import { api, type Catalog, type WatchTask } from '../api.js';
-import { accessPolicy, targetLabel } from '../catalog.js';
+import { resolveCatalogTarget, supportPresentation, targetLabel } from '../catalog.js';
 import styles from './pages.module.css';
 
 type TasksState =
@@ -190,24 +190,32 @@ export function TasksPage() {
       <section className={styles.taskList} aria-label="关注任务列表">
         {state.tasks.map((task) => {
           const label = targetLabel(state.catalog, task.hospitalId, task.campusId, task.departmentId);
-          const policy = accessPolicy(task.hospitalId);
+          const target = resolveCatalogTarget(
+            state.catalog,
+            task.hospitalId,
+            task.campusId,
+            task.departmentId,
+          );
+          const policy = supportPresentation(target?.department.support);
           const busy = busyTaskId === task.id;
           return (
             <article className={styles.taskRow} key={task.id}>
               <div className={styles.taskMain}>
                 <Link className={styles.taskTitle} to={`/tasks/${encodeURIComponent(task.id)}`}>{label}</Link>
                 <p>{task.dateFrom} 至 {task.dateTo} · {policy.title}</p>
+                {!policy.canCreateWatchTask ? <p>该 target 当前不能创建或恢复任务，既有记录仍可查看和暂停。</p> : null}
               </div>
               <span className={task.enabled ? styles.statusGood : styles.statusMuted}>
-                {task.enabled ? (policy.level === 'C' ? '规则提醒已启用' : '监控中') : '已暂停'}
+                {task.enabled ? policy.activityLabel : '已暂停'}
               </span>
               <div className={styles.rowActions}>
                 <Link className={styles.textButton} to={`/tasks/${encodeURIComponent(task.id)}/edit`}>编辑</Link>
                 <button
                   className={styles.secondaryButton}
                   type="button"
-                  disabled={busy}
+                  disabled={busy || (!task.enabled && !policy.canCreateWatchTask)}
                   aria-label={`${task.enabled ? '暂停' : '恢复'}关注 ${label}`}
+                  title={!task.enabled && !policy.canCreateWatchTask ? '当前 target 支持级别不允许恢复' : undefined}
                   onClick={() => void toggle(task)}
                 >
                   {task.enabled ? '暂停' : '恢复'}

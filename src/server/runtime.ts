@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { createBarkChannelFromEnv } from '../adapters/notifications/bark.js';
 import { MacOsNotificationChannel } from '../adapters/notifications/macos.js';
 import { createSmtpChannelFromEnv } from '../adapters/notifications/smtp.js';
+import { createAnzhenHeartCenterScheduleAdapter } from '../adapters/sources/anzhen.js';
 import { createPumchDermatologyScheduleAdapter } from '../adapters/sources/pumch.js';
 import { loadRuntimeConfig } from '../core/config.js';
 import type { NotificationChannel } from '../core/notification-channel.js';
@@ -70,7 +71,10 @@ export async function startApplicationFromEnvironment(
   const sourceAdapters =
     env.EASY_HOSPITAL_DISABLE_LIVE_SOURCES === '1'
       ? []
-      : [createPumchDermatologyScheduleAdapter()];
+      : [
+          createPumchDermatologyScheduleAdapter(),
+          createAnzhenHeartCenterScheduleAdapter(),
+        ];
 
   return startApplication({
     ...config,

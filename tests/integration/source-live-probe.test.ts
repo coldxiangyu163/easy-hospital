@@ -128,18 +128,31 @@ describe('SourceAdapter live probe', () => {
     expect(calls).toBe(1);
   });
 
-  it('协和默认 live probe 无需前端拼接技术 CheckRequest', async () => {
+  it('任意 binding-aware adapter 的默认 live probe 均从 manifest 生成请求', async () => {
     const now = Date.parse('2026-07-19T00:00:00.000Z');
     let receivedRequest: unknown;
     const adapter: SourceAdapter = {
       manifest: {
-        adapterKey: 'pumch-public-dermatology-schedule',
+        adapterKey: 'fixture-binding-live',
         contractVersion: 1,
         version: '1.0.0-test',
         accessClass: 'A',
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 7_200_000,
+        sourceId: 'source-fixture-binding-live',
+        rateLimitKey: 'official-html:fixture-binding-live',
+        eventTypes: ['schedule_released'],
+        stability: 'stable',
+        bindings: [
+          {
+            targetId: 'target-pumch-dermatology',
+            hospitalId: 'hospital-pumch',
+            campusId: 'campus-pumch-dongdan',
+            departmentId: 'department-pumch-dermatology',
+            officialEntryUrl: 'https://pumchapp.pumch.cn/pages/pc/home/index',
+          },
+        ],
       },
       async check(request) {
         receivedRequest = request;
@@ -162,13 +175,13 @@ describe('SourceAdapter live probe', () => {
 
     const response = await app.inject({
       method: 'POST',
-      url: '/api/source-adapters/pumch-public-dermatology-schedule/live-probe',
+      url: '/api/source-adapters/fixture-binding-live/live-probe',
       headers: { host: '127.0.0.1' },
     });
 
     expect(response.statusCode).toBe(200);
     expect(receivedRequest).toMatchObject({
-      sourceId: 'source-pumch-public-schedule',
+      sourceId: 'source-fixture-binding-live',
       hospitalId: 'hospital-pumch',
       campusId: 'campus-pumch-dongdan',
       departmentId: 'department-pumch-dermatology',

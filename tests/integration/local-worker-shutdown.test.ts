@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import type { NotificationChannel, NotificationSendResult } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
@@ -76,7 +77,16 @@ describe('LocalWorker 优雅退出', () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-worker-shutdown-'));
     app = await buildApp({
       databasePath: join(directory, 'data.sqlite3'),
-      sourceAdapters: [adapter],
+      sourceAdapters: [
+        adapter,
+        {
+          manifest: pumchDermatologyScheduleManifest,
+          async check() {
+            throw new Error('关闭 seam 测试不应运行准入 Adapter');
+          },
+        },
+      ],
+      browserAgentToken: 'shutdown-browser-agent-admission-token',
       notificationChannels: [channel],
       workerPollMs: 5,
     });

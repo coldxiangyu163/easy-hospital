@@ -57,16 +57,45 @@ export type HealthResponse = {
   };
 };
 
+export type TargetSupportMode =
+  | 'public-source'
+  | 'browser-agent'
+  | 'rules-only'
+  | 'directory-only';
+
+export type TargetSupport = {
+  active: boolean;
+  sortOrder: number;
+  supportMode: TargetSupportMode;
+  canCreateWatchTask: boolean;
+  // Catalog 未来可直接携带来源身份；当前运行时可从精确 manifest binding 补足。
+  sourceId?: string | null;
+  stability?: 'stable' | 'experimental' | null;
+};
+
+export type CatalogDepartment = {
+  id: string;
+  name: string;
+  targetId: string;
+  support: TargetSupport;
+};
+
+export type CatalogCampus = {
+  id: string;
+  name: string;
+  departments: CatalogDepartment[];
+};
+
+export type CatalogHospital = {
+  id: string;
+  name: string;
+  // 兼容服务端后续直接下发。当前 UI 对既有 API 使用受控官方域 fallback。
+  officialUrl?: string;
+  campuses: CatalogCampus[];
+};
+
 export type Catalog = {
-  hospitals: Array<{
-    id: string;
-    name: string;
-    campuses: Array<{
-      id: string;
-      name: string;
-      departments: Array<{ id: string; name: string }>;
-    }>;
-  }>;
+  hospitals: CatalogHospital[];
 };
 
 export type EventType =
@@ -136,12 +165,25 @@ export type DetectedEvent = {
   };
 };
 
+export type SourceBinding = {
+  targetId: string;
+  hospitalId: string;
+  campusId: string;
+  departmentId: string;
+  officialEntryUrl: string;
+};
+
 export type SourceCapability = {
   key: string;
+  sourceId?: string | null;
+  targetId?: string;
   accessClass: 'A' | 'B' | 'C';
   enabled: boolean;
   transport: 'fetch' | 'playwright' | 'rules-only' | 'local-agent';
   minIntervalMs: number | null;
+  stability?: 'stable' | 'experimental' | null;
+  eventTypes?: EventType[] | null;
+  bindings?: SourceBinding[];
   capabilities: {
     schedule: boolean;
     availability: boolean;

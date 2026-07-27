@@ -42,5 +42,18 @@ describe('Browser Agent MV3 manifest', () => {
         'https://trhos.com/*',
       ].toSorted(),
     );
+    expect(manifest.content_scripts[0]?.matches).not.toEqual(
+      expect.arrayContaining([
+        'https://*.pkuph.cn/*',
+        'https://*.puh3.net.cn/*',
+        'https://*.jst-hosp.com.cn/*',
+        'https://*.fuwaihospital.org/*',
+        'https://*.anzhen.org/*',
+        'https://*.pkufh.com/*',
+        'https://*.bjtth.org/*',
+        'https://*.bch.com.cn/*',
+        'https://*.cicams.ac.cn/*',
+      ]),
+    );
   });
 });

@@ -27,6 +27,7 @@ describe('ReleaseRule HTTP /api seam', () => {
     });
 
     expect(response.statusCode).toBe(200);
+    expect(response.json().rules).toHaveLength(1);
     expect(response.json()).toMatchObject({
       rules: [
         expect.objectContaining({

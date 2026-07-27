@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
 import type { WatchTask } from '../../src/ui/api.js';
+import { pumchCatalog } from '../support/ui-catalog.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -47,6 +48,7 @@ function renderNowWith(health: unknown): void {
     const path = new URL(String(input), 'http://localhost').pathname;
     const payloads: Record<string, unknown> = {
       '/api/health': health,
+      '/api/catalog': pumchCatalog,
       '/api/watch-tasks': { tasks: [watchTask()] },
       '/api/release-rules': { rules: [] },
       '/api/events': { events: [] },
@@ -73,6 +75,7 @@ describe('现在页面', () => {
       const path = new URL(String(input), 'http://localhost').pathname;
       const payloads: Record<string, unknown> = {
         '/api/health': { status: 'healthy', checks: { storage: { status: 'healthy' }, worker: { status: 'healthy' } } },
+        '/api/catalog': { hospitals: [] },
         '/api/watch-tasks': { tasks: [] },
         '/api/release-rules': { rules: [] },
         '/api/events': { events: [] },
@@ -118,7 +121,7 @@ describe('现在页面', () => {
       await screen.findByRole('heading', { name: '下一步：先检查本机 Worker' }),
     ).toBeInTheDocument();
     expect(screen.getByText(/监测曾中断或本机 Worker 异常/)).toBeInTheDocument();
-    expect(screen.queryByText(/监控正在运行/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/公开排班关注正在运行/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '查看本机状态' })).toHaveAttribute('href', '/settings');
   });
 
@@ -134,7 +137,7 @@ describe('现在页面', () => {
     expect(
       await screen.findByRole('heading', { name: '下一步：先检查本机 Worker' }),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/监控正在运行/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/公开排班关注正在运行/)).not.toBeInTheDocument();
   });
 
   it('worker 健康但最近重建过基线时，如实说明空窗不推断且不显示精确时间', async () => {
@@ -146,7 +149,7 @@ describe('现在页面', () => {
       },
     });
 
-    expect(await screen.findByText(/监控正在运行/)).toBeInTheDocument();
+    expect(await screen.findByText(/公开排班关注正在运行/)).toBeInTheDocument();
     expect(screen.getByText(/空窗期间是否有变化不做推断/)).toBeInTheDocument();
     expect(screen.queryByText(/2026-07-19T01:00/)).not.toBeInTheDocument();
   });
@@ -160,7 +163,7 @@ describe('现在页面', () => {
       },
     });
 
-    expect(await screen.findByText(/监控正在运行/)).toBeInTheDocument();
+    expect(await screen.findByText(/公开排班关注正在运行/)).toBeInTheDocument();
     expect(screen.queryByText(/空窗/)).not.toBeInTheDocument();
   });
 });

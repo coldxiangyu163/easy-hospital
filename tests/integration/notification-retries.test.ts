@@ -6,9 +6,27 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import type { NotificationChannel } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
-import { buildApp } from '../../src/server/app.js';
+import {
+  buildApp as buildBaseApp,
+  type BuildAppOptions,
+} from '../../src/server/app.js';
+
+const pumchAdmissionAdapter: SourceAdapter = {
+  manifest: pumchDermatologyScheduleManifest,
+  async check() {
+    throw new Error('通知重试 seam 测试不应运行准入 Adapter');
+  },
+};
+
+const buildApp = (options: BuildAppOptions) =>
+  buildBaseApp({
+    ...options,
+    sourceAdapters: [...(options.sourceAdapters ?? []), pumchAdmissionAdapter],
+    browserAgentToken: 'notification-retry-browser-agent-token',
+  });
 
 describe('通知重试状态机', () => {
   let app: FastifyInstance | undefined;

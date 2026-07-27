@@ -49,6 +49,7 @@ const declaredMigrationChecksums = {
   15: '253d9150aa1eb4a48a64f98e60f67a034797666c232235bd085b71c44d3ba855',
   16: '273e015a473cb5f11c1d82e6029f02997b89615f488cd6be89e0d53319118974',
   17: '81ae9076e3d0813d6bdb183fb22387c776c51ec39154de695e616cb095679d2e',
+  18: 'df7c02872c152e26e3298c6f1d26dc0792c0f66f56bd031d26e04d10fd03c5e7',
 } as const;
 
 function migrationChecksum(migration: MigrationDefinition): string {
@@ -455,6 +456,168 @@ const migration17Sql = `
         ('hospital-tongren', 'news.bjd.com.cn', 'evidence');
     `;
 
+// migration 18 只追加目录、目标能力与 scope 运行时，不修改 1–17 的 SQL 字节。
+// 仅严格解析通过的官方来源升级为 public-source；其余目标继续 fail closed。
+const migration18Sql = `
+      ALTER TABLE hospital
+        ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0);
+      ALTER TABLE campus
+        ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0);
+      ALTER TABLE department ADD COLUMN target_id TEXT;
+      ALTER TABLE department
+        ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1));
+      ALTER TABLE department
+        ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0);
+      ALTER TABLE department
+        ADD COLUMN support_mode TEXT NOT NULL DEFAULT 'directory-only'
+        CHECK (support_mode IN ('public-source', 'browser-agent', 'rules-only', 'directory-only'));
+      ALTER TABLE department
+        ADD COLUMN can_create_watch_task INTEGER NOT NULL DEFAULT 0
+        CHECK (can_create_watch_task IN (0, 1));
+
+      CREATE TABLE source_scope_runtime (
+        scope_key TEXT PRIMARY KEY,
+        adapter_key TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        last_attempt_at INTEGER NOT NULL
+      ) STRICT;
+
+      UPDATE source_runtime
+      SET adapter_key = 'official-html:pumch.cn'
+      WHERE adapter_key = 'pumch-public-dermatology-schedule';
+
+      INSERT INTO source_scope_runtime (
+        scope_key, adapter_key, source_id, last_attempt_at
+      )
+      SELECT
+        'e16304046059651c67fb6eb83b78a1d0b763d7fcb8ba0391dac85ae2b9cd33e6',
+        'pumch-public-dermatology-schedule',
+        'source-pumch-public-schedule',
+        last_attempt_at
+      FROM source_runtime
+      WHERE adapter_key = 'official-html:pumch.cn'
+        AND last_attempt_at IS NOT NULL;
+
+      UPDATE hospital SET sort_order = CASE id
+        WHEN 'hospital-pumch' THEN 10
+        WHEN 'hospital-tongren' THEN 20
+      END
+      WHERE id IN ('hospital-pumch', 'hospital-tongren');
+      UPDATE campus SET sort_order = 10
+        WHERE id IN ('campus-pumch-dongdan', 'campus-tongren-chongwenmen');
+      UPDATE department SET
+        target_id = CASE id
+          WHEN 'department-pumch-dermatology' THEN 'target-pumch-dermatology'
+          WHEN 'department-tongren-rhinology' THEN 'target-tongren-rhinology'
+        END,
+        sort_order = 10,
+        support_mode = CASE id
+          WHEN 'department-pumch-dermatology' THEN 'public-source'
+          WHEN 'department-tongren-rhinology' THEN 'rules-only'
+        END,
+        can_create_watch_task = 1
+      WHERE id IN ('department-pumch-dermatology', 'department-tongren-rhinology');
+
+      INSERT INTO hospital (id, name, official_url, sort_order) VALUES
+        ('hospital-pkuph', '北京大学人民医院', 'https://www.pkuph.cn/', 30),
+        ('hospital-puh3', '北京大学第三医院', 'https://www.puh3.net.cn/', 40),
+        ('hospital-jishuitan', '北京积水潭医院', 'https://www.jst-hosp.com.cn/', 50),
+        ('hospital-fuwai', '中国医学科学院阜外医院', 'https://www.fuwaihospital.org/', 60),
+        ('hospital-anzhen', '北京安贞医院', 'https://www.anzhen.org/', 70),
+        ('hospital-pkufh', '北京大学第一医院', 'https://www.pkufh.com/', 80),
+        ('hospital-tiantan', '北京天坛医院', 'https://www.bjtth.org/', 90),
+        ('hospital-beijing-childrens', '北京儿童医院', 'https://www.bch.com.cn/', 100),
+        ('hospital-cicams', '中国医学科学院肿瘤医院', 'https://www.cicams.ac.cn/', 110);
+
+      INSERT INTO campus (id, hospital_id, name, sort_order) VALUES
+        ('campus-pkuph-xizhimen', 'hospital-pkuph', '西直门', 10),
+        ('campus-puh3-main', 'hospital-puh3', '院本部', 10),
+        ('campus-jishuitan-xinjiekou', 'hospital-jishuitan', '新街口', 10),
+        ('campus-jishuitan-huilongguan', 'hospital-jishuitan', '回龙观', 20),
+        ('campus-fuwai-beilishi', 'hospital-fuwai', '北礼士路临床医疗区', 10),
+        ('campus-anzhen-chaoyang', 'hospital-anzhen', '朝阳院区', 10),
+        ('campus-pkufh-central', 'hospital-pkufh', '中心院区', 10),
+        ('campus-tiantan-fengtai', 'hospital-tiantan', '丰台院区', 10),
+        ('campus-beijing-childrens-xicheng', 'hospital-beijing-childrens', '西城院区', 10),
+        ('campus-cicams-beijing', 'hospital-cicams', '北京院区', 10);
+
+      INSERT INTO department (
+        id, hospital_id, campus_id, name, target_id, active, sort_order,
+        support_mode, can_create_watch_task
+      ) VALUES
+        ('department-pkuph-hematology', 'hospital-pkuph', 'campus-pkuph-xizhimen', '血液科', 'target-pkuph-hematology', 1, 10, 'directory-only', 0),
+        ('department-pkuph-orthopedics', 'hospital-pkuph', 'campus-pkuph-xizhimen', '骨科', 'target-pkuph-orthopedics', 1, 20, 'directory-only', 0),
+        ('department-pkuph-breast-surgery', 'hospital-pkuph', 'campus-pkuph-xizhimen', '乳腺外科', 'target-pkuph-breast-surgery', 1, 30, 'directory-only', 0),
+        ('department-pkuph-gynecology', 'hospital-pkuph', 'campus-pkuph-xizhimen', '妇科', 'target-pkuph-gynecology', 1, 40, 'directory-only', 0),
+        ('department-pkuph-rheumatology-immunology', 'hospital-pkuph', 'campus-pkuph-xizhimen', '风湿免疫科', 'target-pkuph-rheumatology-immunology', 1, 50, 'directory-only', 0),
+        ('department-puh3-reproductive-medicine', 'hospital-puh3', 'campus-puh3-main', '生殖医学科', 'target-puh3-reproductive-medicine', 1, 10, 'directory-only', 0),
+        ('department-puh3-sports-medicine', 'hospital-puh3', 'campus-puh3-main', '运动医学科', 'target-puh3-sports-medicine', 1, 20, 'directory-only', 0),
+        ('department-puh3-orthopedics', 'hospital-puh3', 'campus-puh3-main', '骨科', 'target-puh3-orthopedics', 1, 30, 'directory-only', 0),
+        ('department-puh3-obstetrics-gynecology', 'hospital-puh3', 'campus-puh3-main', '妇产科', 'target-puh3-obstetrics-gynecology', 1, 40, 'directory-only', 0),
+        ('department-puh3-gastroenterology', 'hospital-puh3', 'campus-puh3-main', '消化科', 'target-puh3-gastroenterology', 1, 50, 'directory-only', 0),
+        ('department-jishuitan-trauma-orthopedics', 'hospital-jishuitan', 'campus-jishuitan-xinjiekou', '创伤骨科', 'target-jishuitan-trauma-orthopedics', 1, 10, 'directory-only', 0),
+        ('department-jishuitan-hand-surgery', 'hospital-jishuitan', 'campus-jishuitan-xinjiekou', '手外科', 'target-jishuitan-hand-surgery', 1, 20, 'directory-only', 0),
+        ('department-jishuitan-sports-medicine', 'hospital-jishuitan', 'campus-jishuitan-xinjiekou', '运动医学科', 'target-jishuitan-sports-medicine', 1, 30, 'directory-only', 0),
+        ('department-jishuitan-osteoporosis', 'hospital-jishuitan', 'campus-jishuitan-xinjiekou', '骨质疏松科', 'target-jishuitan-osteoporosis', 1, 40, 'directory-only', 0),
+        ('department-jishuitan-burn-plastic-wound-repair', 'hospital-jishuitan', 'campus-jishuitan-huilongguan', '烧伤整形与创面修复科', 'target-jishuitan-burn-plastic-wound-repair', 1, 10, 'directory-only', 0),
+        ('department-fuwai-coronary-heart-disease', 'hospital-fuwai', 'campus-fuwai-beilishi', '冠心病', 'target-fuwai-coronary-heart-disease', 1, 10, 'directory-only', 0),
+        ('department-fuwai-arrhythmia', 'hospital-fuwai', 'campus-fuwai-beilishi', '心律失常', 'target-fuwai-arrhythmia', 1, 20, 'directory-only', 0),
+        ('department-fuwai-structural-heart-disease', 'hospital-fuwai', 'campus-fuwai-beilishi', '结构性心脏病', 'target-fuwai-structural-heart-disease', 1, 30, 'directory-only', 0),
+        ('department-fuwai-cardiac-surgery', 'hospital-fuwai', 'campus-fuwai-beilishi', '心脏外科', 'target-fuwai-cardiac-surgery', 1, 40, 'directory-only', 0),
+        ('department-fuwai-cardiomyopathy', 'hospital-fuwai', 'campus-fuwai-beilishi', '心肌病', 'target-fuwai-cardiomyopathy', 1, 50, 'directory-only', 0),
+        ('department-anzhen-coronary-heart-disease-center', 'hospital-anzhen', 'campus-anzhen-chaoyang', '冠心病中心', 'target-anzhen-coronary-heart-disease-center', 1, 10, 'public-source', 1),
+        ('department-anzhen-arrhythmia-center', 'hospital-anzhen', 'campus-anzhen-chaoyang', '心律失常中心', 'target-anzhen-arrhythmia-center', 1, 20, 'public-source', 1),
+        ('department-anzhen-cardiac-surgery', 'hospital-anzhen', 'campus-anzhen-chaoyang', '心脏外科', 'target-anzhen-cardiac-surgery', 1, 30, 'directory-only', 0),
+        ('department-anzhen-pediatric-heart-center', 'hospital-anzhen', 'campus-anzhen-chaoyang', '小儿心脏中心', 'target-anzhen-pediatric-heart-center', 1, 40, 'directory-only', 0),
+        ('department-anzhen-vascular-surgery', 'hospital-anzhen', 'campus-anzhen-chaoyang', '血管外科', 'target-anzhen-vascular-surgery', 1, 50, 'directory-only', 0),
+        ('department-pkufh-dermatology-venereology', 'hospital-pkufh', 'campus-pkufh-central', '皮肤性病科', 'target-pkufh-dermatology-venereology', 1, 10, 'directory-only', 0),
+        ('department-pkufh-urology', 'hospital-pkufh', 'campus-pkufh-central', '泌尿外科', 'target-pkufh-urology', 1, 20, 'directory-only', 0),
+        ('department-pkufh-nephrology', 'hospital-pkufh', 'campus-pkufh-central', '肾脏内科', 'target-pkufh-nephrology', 1, 30, 'directory-only', 0),
+        ('department-pkufh-neurology', 'hospital-pkufh', 'campus-pkufh-central', '神经内科', 'target-pkufh-neurology', 1, 40, 'directory-only', 0),
+        ('department-tiantan-neurosurgery', 'hospital-tiantan', 'campus-tiantan-fengtai', '神经外科', 'target-tiantan-neurosurgery', 1, 10, 'directory-only', 0),
+        ('department-tiantan-neurology', 'hospital-tiantan', 'campus-tiantan-fengtai', '神经内科', 'target-tiantan-neurology', 1, 20, 'directory-only', 0),
+        ('department-tiantan-neuro-oncology', 'hospital-tiantan', 'campus-tiantan-fengtai', '神经肿瘤综合治疗', 'target-tiantan-neuro-oncology', 1, 30, 'directory-only', 0),
+        ('department-tiantan-neurological-rehabilitation', 'hospital-tiantan', 'campus-tiantan-fengtai', '神经康复', 'target-tiantan-neurological-rehabilitation', 1, 40, 'directory-only', 0),
+        ('department-beijing-childrens-respiratory-medicine', 'hospital-beijing-childrens', 'campus-beijing-childrens-xicheng', '呼吸科', 'target-beijing-childrens-respiratory-medicine', 1, 10, 'directory-only', 0),
+        ('department-beijing-childrens-hematology', 'hospital-beijing-childrens', 'campus-beijing-childrens-xicheng', '血液病科', 'target-beijing-childrens-hematology', 1, 20, 'directory-only', 0),
+        ('department-beijing-childrens-otolaryngology-head-neck-surgery', 'hospital-beijing-childrens', 'campus-beijing-childrens-xicheng', '耳鼻咽喉头颈外科', 'target-beijing-childrens-otolaryngology-head-neck-surgery', 1, 30, 'directory-only', 0),
+        ('department-beijing-childrens-neurology-center', 'hospital-beijing-childrens', 'campus-beijing-childrens-xicheng', '神经中心', 'target-beijing-childrens-neurology-center', 1, 40, 'directory-only', 0),
+        ('department-beijing-childrens-gastroenterology', 'hospital-beijing-childrens', 'campus-beijing-childrens-xicheng', '消化科', 'target-beijing-childrens-gastroenterology', 1, 50, 'directory-only', 0),
+        ('department-cicams-thoracic-surgery', 'hospital-cicams', 'campus-cicams-beijing', '胸外科', 'target-cicams-thoracic-surgery', 1, 10, 'directory-only', 0),
+        ('department-cicams-breast-surgery', 'hospital-cicams', 'campus-cicams-beijing', '乳腺外科', 'target-cicams-breast-surgery', 1, 20, 'directory-only', 0),
+        ('department-cicams-colorectal-surgery', 'hospital-cicams', 'campus-cicams-beijing', '结直肠外科', 'target-cicams-colorectal-surgery', 1, 30, 'directory-only', 0),
+        ('department-cicams-gynecology', 'hospital-cicams', 'campus-cicams-beijing', '妇科', 'target-cicams-gynecology', 1, 40, 'directory-only', 0),
+        ('department-cicams-radiation-oncology', 'hospital-cicams', 'campus-cicams-beijing', '放射治疗科', 'target-cicams-radiation-oncology', 1, 50, 'directory-only', 0);
+
+      CREATE UNIQUE INDEX department_target_id_unique ON department (target_id);
+
+      INSERT INTO hospital_domain (hospital_id, domain, kind) VALUES
+        ('hospital-pkuph', 'pkuph.cn', 'official'),
+        ('hospital-pkuph', 'pkuph.cn', 'evidence'),
+        ('hospital-puh3', 'puh3.net.cn', 'official'),
+        ('hospital-puh3', 'puh3.net.cn', 'evidence'),
+        ('hospital-jishuitan', 'jst-hosp.com.cn', 'official'),
+        ('hospital-jishuitan', 'jst-hosp.com.cn', 'evidence'),
+        ('hospital-fuwai', 'fuwaihospital.org', 'official'),
+        ('hospital-fuwai', 'fuwaihospital.org', 'evidence'),
+        ('hospital-fuwai', 'fuwai.com', 'official'),
+        ('hospital-fuwai', 'fuwai.com', 'evidence'),
+        ('hospital-anzhen', 'anzhen.org', 'official'),
+        ('hospital-anzhen', 'anzhen.org', 'evidence'),
+        ('hospital-anzhen', 'anzhen.org.cn', 'official'),
+        ('hospital-anzhen', 'anzhen.org.cn', 'evidence'),
+        ('hospital-pkufh', 'pkufh.com', 'official'),
+        ('hospital-pkufh', 'pkufh.com', 'evidence'),
+        ('hospital-pkufh', 'pkufh.91health.net', 'official'),
+        ('hospital-pkufh', 'pkufh.91health.net', 'evidence'),
+        ('hospital-tiantan', 'bjtth.org', 'official'),
+        ('hospital-tiantan', 'bjtth.org', 'evidence'),
+        ('hospital-beijing-childrens', 'bch.com.cn', 'official'),
+        ('hospital-beijing-childrens', 'bch.com.cn', 'evidence'),
+        ('hospital-cicams', 'cicams.ac.cn', 'official'),
+        ('hospital-cicams', 'cicams.ac.cn', 'evidence');
+    `;
+
 const migrations = [
   ...legacyMigrations,
   {
@@ -466,6 +629,11 @@ const migrations = [
     version: 17,
     name: 'hospital-domain-policy',
     sql: migration17Sql,
+  },
+  {
+    version: 18,
+    name: 'beijing-hospital-directory',
+    sql: migration18Sql,
   },
 ] as const satisfies readonly MigrationDefinition[];
 
@@ -894,59 +1062,4 @@ export function restoreDatabaseBackup(
   } finally {
     databaseLock.release();
   }
-}
-
-export type Catalog = {
-  hospitals: Array<{
-    id: string;
-    name: string;
-    campuses: Array<{
-      id: string;
-      name: string;
-      departments: Array<{ id: string; name: string }>;
-    }>;
-  }>;
-};
-
-export function readCatalog(database: SqliteDatabase): Catalog {
-  const rows = database
-    .prepare(
-      `SELECT
-        h.id AS hospital_id,
-        h.name AS hospital_name,
-        c.id AS campus_id,
-        c.name AS campus_name,
-        d.id AS department_id,
-        d.name AS department_name
-      FROM hospital h
-      JOIN campus c ON c.hospital_id = h.id
-      JOIN department d ON d.campus_id = c.id
-      ORDER BY h.name, c.name, d.name`,
-    )
-    .all() as Array<{
-    hospital_id: string;
-    hospital_name: string;
-    campus_id: string;
-    campus_name: string;
-    department_id: string;
-    department_name: string;
-  }>;
-
-  const hospitals = new Map<string, Catalog['hospitals'][number]>();
-  for (const row of rows) {
-    let hospital = hospitals.get(row.hospital_id);
-    if (!hospital) {
-      hospital = { id: row.hospital_id, name: row.hospital_name, campuses: [] };
-      hospitals.set(row.hospital_id, hospital);
-    }
-
-    let campus = hospital.campuses.find(({ id }) => id === row.campus_id);
-    if (!campus) {
-      campus = { id: row.campus_id, name: row.campus_name, departments: [] };
-      hospital.campuses.push(campus);
-    }
-    campus.departments.push({ id: row.department_id, name: row.department_name });
-  }
-
-  return { hospitals: [...hospitals.values()] };
 }

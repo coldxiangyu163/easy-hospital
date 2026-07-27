@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { ApiError, api, type Catalog, type HealthResponse, type SourceCapability, type SourceProbeResult } from '../api.js';
-import { accessPolicy } from '../catalog.js';
+import {
+  ApiError,
+  api,
+  type Catalog,
+  type HealthResponse,
+  type SourceCapability,
+  type SourceProbeResult,
+} from '../api.js';
+import {
+  officialHospitalUrl,
+  sourceBindingForTarget,
+  sourceCapabilityForTarget,
+  supportPresentation,
+} from '../catalog.js';
 import styles from './pages.module.css';
 
 type SourcesState =
@@ -41,15 +53,24 @@ const sourceRuntimeMessage = (adapter: SourceCapability): { text: string; warnin
 };
 
 const probeMessage = (result: SourceProbeResult): string => {
-  if (result.status === 'OK' && result.eventsCreated === 0) return '来源自检已完成；此次未发现可通知变化。';
-  if (result.status === 'OK') return `来源自检已完成，并记录 ${result.eventsCreated} 条变化；请在通知记录中核验。`;
+  if (result.status === 'OK' && result.eventsCreated === 0) return '来源自检已完成；此次未发现新的公开排班记录。';
+  if (result.status === 'OK') return `来源自检已完成，并记录 ${result.eventsCreated} 条公开排班变化；请在通知记录中核验。`;
   if (result.status === 'PARTIAL') return '来源仅完成部分检查；结果不代表无号，请稍后再核验。';
-  if (result.status === 'AUTH_REQUIRED') return '来源需要重新登录；请先检查本机浏览器会话。';
+  if (result.status === 'AUTH_REQUIRED') return '来源需要登录，本次公开来源结论不可用。';
   if (result.status === 'RATE_LIMITED') return '来源限制了检查频率；请等待下一次允许时间。';
   if (result.status === 'SOURCE_CHANGED') return '来源结构发生变化；本次结果不可用，请等待 Adapter 更新。';
-  if (result.status === 'UNSUPPORTED') return '当前 Adapter 不支持这次来源自检。';
+  if (result.status === 'UNSUPPORTED') return '当前 Adapter 不支持这个 target 的来源自检。';
   return '来源暂时失败；本次结果不可用，也不代表无号。';
 };
+
+function levelMark(supportMode: string, stability: SourceCapability['stability']): string {
+  if (supportMode === 'rules-only') return '规';
+  if (supportMode === 'directory-only') return '录';
+  if (supportMode === 'browser-agent') return '页';
+  if (stability === 'stable') return '稳';
+  if (stability === 'experimental') return '试';
+  return '源';
+}
 
 export function SourcesPage() {
   const [attempt, setAttempt] = useState(0);
@@ -118,12 +139,86 @@ export function SourcesPage() {
     ),
   );
 
+  const renderTarget = ({ hospital, campus, department }: (typeof targets)[number]) => {
+    const target = { hospital, campus, department };
+    const adapter = sourceCapabilityForTarget(target, state.adapters);
+    const binding = sourceBindingForTarget(target, adapter);
+    const policy = supportPresentation(department.support, adapter);
+    const probeState = adapter ? probeStates[adapter.key] : undefined;
+    const runtimeMessage = adapter ? sourceRuntimeMessage(adapter) : undefined;
+    const officialUrl = binding?.officialEntryUrl ?? officialHospitalUrl(hospital);
+    const canProbe = Boolean(
+      adapter?.enabled &&
+      adapter.accessClass === 'A' &&
+      adapter.bindings?.[0]?.targetId === department.targetId,
+    );
+    const sourceStatus =
+      department.support.supportMode === 'directory-only'
+        ? '待可靠公开来源'
+        : adapter?.enabled
+          ? department.support.supportMode === 'rules-only'
+            ? '规则能力已装配'
+            : '来源已装配'
+          : '本次运行未装配';
+
+    return (
+      <article className={styles.sourceRow} key={department.targetId}>
+        <div
+          className={styles.sourceLevel}
+          aria-label={`${policy.title}${adapter?.stability ? `，${adapter.stability}` : ''}`}
+        >
+          {levelMark(department.support.supportMode, adapter?.stability)}
+        </div>
+        <div className={styles.sourceMain}>
+          <h2>{hospital.name} · {campus.name} · {department.name}</h2>
+          <strong>{policy.title}</strong>
+          <p>{policy.description}</p>
+          <code className={styles.adapterKey}>{department.targetId}</code>
+          {adapter?.sourceId ? <code className={styles.adapterKey}>{adapter.sourceId}</code> : null}
+          {adapter ? <code className={styles.adapterKey}>{adapter.key}</code> : null}
+          {adapter && department.support.supportMode === 'public-source' && runtimeMessage ? (
+            <p className={runtimeMessage.warning ? styles.probeError : styles.probeResult}>
+              {runtimeMessage.text}
+            </p>
+          ) : null}
+        </div>
+        <div className={styles.sourceStatusGroup}>
+          <span className={adapter?.enabled ? styles.statusGood : styles.statusWarning}>
+            {sourceStatus}
+          </span>
+          {officialUrl ? (
+            <a className={styles.secondaryButton} href={officialUrl} target="_blank" rel="noreferrer">
+              打开医院官方入口<span className={styles.visuallyHidden}>（新标签页打开）</span>
+            </a>
+          ) : null}
+          {canProbe && adapter ? (
+            <button
+              className={styles.secondaryButton}
+              type="button"
+              disabled={probeState?.status === 'running'}
+              onClick={() => void runProbe(adapter.key)}
+              aria-label={`自检 ${hospital.name} ${campus.name} ${department.name} 公开来源`}
+            >
+              {probeState?.status === 'running' ? '正在自检…' : '运行公开来源自检'}
+            </button>
+          ) : null}
+          {canProbe && probeState?.status === 'done' ? (
+            <p className={styles.probeResult} role="status">{probeMessage(probeState.result)}</p>
+          ) : null}
+          {canProbe && probeState?.status === 'error' ? (
+            <p className={styles.probeError} role="alert">{probeState.message}</p>
+          ) : null}
+        </div>
+      </article>
+    );
+  };
+
   return (
     <>
       <header className={styles.pageHeader}>
         <p className={styles.eyebrow}>数据来源</p>
-        <h1 className={styles.pageTitle}>数据从哪里来</h1>
-        <p className={styles.pageLead}>A、B、C 表示读取边界，不是号源“好坏”等级。当前 catalog 来自本机 API。</p>
+        <h1 className={styles.pageTitle}>11 家医院，逐个 target 说明能力</h1>
+        <p className={styles.pageLead}>目录可浏览不等于已经支持。当前只有协和皮肤科稳定公开来源、安贞两个中心实验性公开来源，以及同仁鼻科规则提醒；其余 target 等待可靠公开来源。</p>
       </header>
 
       <section className={styles.sourceIntro}>
@@ -131,64 +226,51 @@ export function SourcesPage() {
           <span>本机健康 API</span>
           <strong>{state.health.status === 'healthy' ? '本机服务正常' : '本机服务需要处理'}</strong>
         </div>
-        <p>Adapter 配置来自 /api/source-adapters</p>
+        <p>{state.catalog.hospitals.length} 家医院 · {targets.length} 个 target</p>
       </section>
 
-      <section className={styles.sourceList} aria-label="已支持来源范围">
-        {targets.map(({ hospital, campus, department }) => {
-          const policy = accessPolicy(hospital.id);
-          const adapter = state.adapters.find((item) => item.accessClass === policy.level);
-          const probeState = adapter ? probeStates[adapter.key] : undefined;
-          const runtimeMessage = adapter ? sourceRuntimeMessage(adapter) : undefined;
+      <section className={styles.sourceList} aria-label="医院、院区、科室及来源支持范围">
+        {state.catalog.hospitals.map((hospital) => {
+          const hospitalTargets = targets.filter((target) => target.hospital.id === hospital.id);
+          const supportedCount = hospitalTargets.filter(
+            ({ department }) => department.support.supportMode !== 'directory-only',
+          ).length;
+          const campusCount = hospital.campuses.length;
           return (
-            <article className={styles.sourceRow} key={department.id}>
-              <div className={styles.sourceLevel} aria-label={`${policy.level} 级`}>
-                {policy.level}
-              </div>
-              <div className={styles.sourceMain}>
-                <h2>{hospital.name} · {campus.name} · {department.name}</h2>
-                <strong>{policy.level === 'A' ? 'A 级公开来源' : 'C 级规则提醒'}</strong>
-                <p>{policy.description}</p>
-                {adapter ? <code className={styles.adapterKey}>{adapter.key}</code> : null}
-                {policy.level === 'A' && runtimeMessage ? (
-                  <p className={runtimeMessage.warning ? styles.probeError : styles.probeResult}>
-                    {runtimeMessage.text}
-                  </p>
-                ) : null}
-              </div>
-              <div className={styles.sourceStatusGroup}>
-                <span className={adapter?.enabled ? styles.statusGood : styles.statusWarning}>
-                  {adapter?.enabled ? '已启用' : '未配置'}
+            <details
+              className={styles.sourceHospital}
+              key={hospital.id}
+              open={supportedCount > 0}
+            >
+              <summary>
+                <span>
+                  <strong>{hospital.name}</strong>
+                  <small>{campusCount} 个院区 · {hospitalTargets.length} 个 target</small>
                 </span>
-                {policy.level === 'A' && adapter?.enabled ? (
-                  <button className={styles.secondaryButton} type="button" disabled={probeState?.status === 'running'} onClick={() => void runProbe(adapter.key)}>
-                    {probeState?.status === 'running' ? '正在自检…' : '运行 A 级来源自检'}
-                  </button>
-                ) : null}
-                {probeState?.status === 'done' ? (
-                  <p className={styles.probeResult} role="status">{probeMessage(probeState.result)}</p>
-                ) : null}
-                {probeState?.status === 'error' ? (
-                  <p className={styles.probeError} role="alert">{probeState.message}</p>
-                ) : null}
-              </div>
-            </article>
+                <span className={supportedCount > 0 ? styles.statusGood : styles.statusWarning}>
+                  {supportedCount > 0 ? `${supportedCount} 个可创建任务` : '全部仅目录'}
+                </span>
+              </summary>
+              <div>{hospitalTargets.map(renderTarget)}</div>
+            </details>
           );
         })}
 
         {(() => {
-          const browserAdapter = state.adapters.find((item) => item.accessClass === 'B');
+          const browserAdapter = state.adapters.find(
+            (item) => item.key === 'browser-agent' && item.transport === 'local-agent',
+          );
           return (
             <article className={styles.sourceRow}>
-              <div className={styles.sourceLevel} aria-label="B 级">B</div>
+              <div className={styles.sourceLevel} aria-label="实验性本机 Browser Agent">页</div>
               <div className={styles.sourceMain}>
-                <h2>B 级本机浏览器会话</h2>
-                <strong>仅限 127.0.0.1</strong>
-                <p>只返回脱敏的有号、无号或 unknown。医院 Cookie 与会话 Token 不离开浏览器，不写入产品数据库。</p>
+                <h2>实验性本机 Browser Agent</h2>
+                <strong>用户主动单次读取，不是后台监控</strong>
+                <p>只返回人工触发时页面可见的脱敏状态。状态可能立即失效，不承诺实时余号或退号；11 家目录不会自动扩大扩展 scope。</p>
                 {browserAdapter ? <code className={styles.adapterKey}>{browserAdapter.key}</code> : null}
               </div>
-              <span className={browserAdapter?.enabled ? styles.statusGood : styles.statusWarning}>
-                {browserAdapter?.enabled ? '已启用' : '未配置'}
+              <span className={browserAdapter?.enabled ? styles.statusGood : styles.statusMuted}>
+                {browserAdapter?.enabled ? '已配对' : '未配置'}
               </span>
             </article>
           );
@@ -197,7 +279,7 @@ export function SourcesPage() {
 
       <aside className={styles.boundaryNote}>
         <strong>空响应和来源失败都不是“无号”</strong>
-        <p>C 级来源不逆向私有接口。任何来源检测结果都需要在官方渠道重新确认。</p>
+        <p>公开来源只表示排班；规则来源只安排提醒；directory-only 只提供目录和官网入口。所有预约必须在官方渠道手动完成。</p>
       </aside>
     </>
   );

@@ -17,17 +17,14 @@
 
 challenge 只发送至少 16 字节随机数编码成的 base64url nonce，token 不进入 challenge query、header 或 body；每次 observation Bearer 提交前都会重新验证 proof。错误 proof 时不会发送 observation。
 
-## 让任务接收 B 级事件
+## 当前任务与目录边界
 
-提交观察成功不等于会收到通知：主进程只把状态变化通知给**订阅了对应事件类型**的关注任务。
+截至 2026-07-27，主 UI 不再为新任务提供 B 级“实时余号/退号”事件开关。这样可以避免把实验性单次读取写成稳定监控：
 
-1. 确认 `EASY_HOSPITAL_BROWSER_AGENT_TOKEN` 已配置且主进程“本机设置”页显示 B 级“已配置”；此时任务表单才会出现实验事件勾选。
-2. 创建或编辑关注任务时，在“事件类型”中勾选需要的实验事件：
-   - **实验性 B 级 · 从无号变为有号**（`availability_changed_to_available`）：同一号源上次明确无号、本次明确有号时通知；
-   - **实验性 B 级 · 疑似退号回流**（`cancellation_slot_detected`）：已发布排班 30 分钟内从无号变为有号时的保守推断，通知统一写作“疑似退号回流”，不代表确定退号。
-3. “新排班发布”（`schedule_released`）始终包含，无需勾选；只保留它时，B 级观察不会触发任何通知。
-4. 保存任务后再按上一节流程读取并提交观察；未勾选对应事件时提交只会更新检测记录，不发送通知。
+- 新建 `public-source` 任务只订阅 `schedule_released`；同仁 `rules-only` 任务只创建规则提醒。
+- 编辑历史上已经包含 `availability_changed_to_available` 或 `cancellation_slot_detected` 的任务时，UI 会原样保留后端值，避免静默破坏既有配置，但不会把它展示成新的稳定承诺。
+- 观察提交成功只表示本机接受了一次脱敏快照，不表示任务一定订阅事件，也不表示页面状态仍然有效。
 
-同仁（C 级）任务按产品边界只做规则提醒，任务表单不提供上述实验勾选。
+migration 18 增加的人民、北医三院、积水潭、阜外、安贞、北大一院、天坛、北京儿童、医科院肿瘤目录**不会**扩大本扩展的 `manifest.json` matches、服务端 Browser Agent scope 或 parser。尤其 directory-only target 即使官网可打开，也必须被扩展和服务端 payload 契约拒绝。若未来扩大范围，必须单独修改权限、scope、解析与负向测试，并完成用户确认和隐私评审。
 
 登录墙、验证码、候补、上下文不完整、冲突文字、未识别状态或 selector 失效均返回 `unknown`。扩展不会自动点击、预约、提交、付款或绕过验证码。启用前仍需真实会话 PoC 与低频观察。

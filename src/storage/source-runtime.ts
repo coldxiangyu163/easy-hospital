@@ -1,16 +1,8 @@
 import type { CheckResult } from '../core/source-adapter.js';
 import type { SqliteDatabase } from './database.js';
 
-const PUMCH_ADAPTER_KEY = 'pumch-public-dermatology-schedule';
-const PUMCH_GLOBAL_INTERVAL_MS = 2 * 60 * 60 * 1_000;
-
-export function sourceMinimumIntervalMs(
-  adapterKey: string,
-  adapterMinimumMs: number,
-): number {
-  return adapterKey === PUMCH_ADAPTER_KEY
-    ? Math.max(adapterMinimumMs, PUMCH_GLOBAL_INTERVAL_MS)
-    : adapterMinimumMs;
+export function sourceMinimumIntervalMs(adapterMinimumMs: number): number {
+  return Math.max(adapterMinimumMs, 300_000);
 }
 
 type SourceRuntimeRow = {
@@ -44,26 +36,26 @@ function toRuntime(row: SourceRuntimeRow): SourceRuntime {
 
 export function getSourceRuntime(
   database: SqliteDatabase,
-  adapterKey: string,
+  rateLimitKey: string,
 ): SourceRuntime | undefined {
   const row = database
     .prepare('SELECT * FROM source_runtime WHERE adapter_key = ?')
-    .get(adapterKey) as SourceRuntimeRow | undefined;
+    .get(rateLimitKey) as SourceRuntimeRow | undefined;
   return row ? toRuntime(row) : undefined;
 }
 
 export function sourceRetryAfterMs(
   database: SqliteDatabase,
-  adapterKey: string,
+  rateLimitKey: string,
   now: number,
 ): number {
-  const runtime = getSourceRuntime(database, adapterKey);
+  const runtime = getSourceRuntime(database, rateLimitKey);
   return runtime ? Math.max(0, runtime.nextAllowedAt - now) : 0;
 }
 
 export function recordSourceAttempt(
   database: SqliteDatabase,
-  adapterKey: string,
+  rateLimitKey: string,
   now: number,
   minIntervalMs: number,
 ): void {
@@ -78,12 +70,12 @@ export function recordSourceAttempt(
         last_status = 'RUNNING',
         last_error_code = NULL`,
     )
-    .run(adapterKey, now, now + minIntervalMs);
+    .run(rateLimitKey, now, now + minIntervalMs);
 }
 
 export function recordSourceFailure(
   database: SqliteDatabase,
-  adapterKey: string,
+  rateLimitKey: string,
   errorCode: string,
   nextAllowedAt: number,
 ): void {
@@ -95,12 +87,12 @@ export function recordSourceFailure(
         last_error_code = ?
       WHERE adapter_key = ?`,
     )
-    .run(nextAllowedAt, errorCode, adapterKey);
+    .run(nextAllowedAt, errorCode, rateLimitKey);
 }
 
 export function recordSourceResult(
   database: SqliteDatabase,
-  adapterKey: string,
+  rateLimitKey: string,
   result: CheckResult,
   minNextAllowedAt: number,
 ): void {
@@ -122,6 +114,43 @@ export function recordSourceResult(
       nextAllowedAt,
       result.status,
       result.errorCode ?? null,
-      adapterKey,
+      rateLimitKey,
     );
+}
+
+export function getSourceScopeLastAttemptAt(
+  database: SqliteDatabase,
+  scopeKey: string,
+): number | null {
+  const row = database
+    .prepare('SELECT last_attempt_at FROM source_scope_runtime WHERE scope_key = ?')
+    .get(scopeKey) as { last_attempt_at: number } | undefined;
+  return row?.last_attempt_at ?? null;
+}
+
+export function sourceScopeNeedsRebaseline(
+  database: SqliteDatabase,
+  scopeKey: string,
+  now: number,
+  intervalMs: number,
+): boolean {
+  const lastAttemptAt = getSourceScopeLastAttemptAt(database, scopeKey);
+  return lastAttemptAt !== null && now - lastAttemptAt > intervalMs * 2;
+}
+
+export function recordSourceScopeAttempt(
+  database: SqliteDatabase,
+  input: { scopeKey: string; adapterKey: string; sourceId: string; now: number },
+): void {
+  database
+    .prepare(
+      `INSERT INTO source_scope_runtime (
+        scope_key, adapter_key, source_id, last_attempt_at
+      ) VALUES (?, ?, ?, ?)
+      ON CONFLICT (scope_key) DO UPDATE SET
+        adapter_key = excluded.adapter_key,
+        source_id = excluded.source_id,
+        last_attempt_at = excluded.last_attempt_at`,
+    )
+    .run(input.scopeKey, input.adapterKey, input.sourceId, input.now);
 }

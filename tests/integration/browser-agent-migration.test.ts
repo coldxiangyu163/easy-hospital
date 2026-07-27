@@ -29,14 +29,41 @@ describe('Browser Agent admission migration', () => {
         last_ingest_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL
       ) STRICT;
+      CREATE TABLE source_runtime (
+        adapter_key TEXT PRIMARY KEY,
+        last_attempt_at INTEGER,
+        last_success_at INTEGER,
+        next_allowed_at INTEGER NOT NULL DEFAULT 0,
+        last_status TEXT,
+        last_error_code TEXT
+      ) STRICT;
       CREATE TABLE hospital (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         official_url TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE campus (
+        id TEXT PRIMARY KEY,
+        hospital_id TEXT NOT NULL REFERENCES hospital(id),
+        name TEXT NOT NULL,
+        UNIQUE (hospital_id, name)
+      ) STRICT;
+      CREATE TABLE department (
+        id TEXT PRIMARY KEY,
+        hospital_id TEXT NOT NULL REFERENCES hospital(id),
+        campus_id TEXT NOT NULL REFERENCES campus(id),
+        name TEXT NOT NULL,
+        UNIQUE (campus_id, name)
+      ) STRICT;
       INSERT INTO hospital (id, name, official_url) VALUES
         ('hospital-pumch', '北京协和医院', 'https://www.pumch.cn/'),
         ('hospital-tongren', '北京同仁医院', 'https://www.trhos.com/');
+      INSERT INTO campus (id, hospital_id, name) VALUES
+        ('campus-pumch-dongdan', 'hospital-pumch', '东单院区'),
+        ('campus-tongren-chongwenmen', 'hospital-tongren', '崇文门院区');
+      INSERT INTO department (id, hospital_id, campus_id, name) VALUES
+        ('department-pumch-dermatology', 'hospital-pumch', 'campus-pumch-dongdan', '皮肤科'),
+        ('department-tongren-rhinology', 'hospital-tongren', 'campus-tongren-chongwenmen', '鼻科');
       INSERT INTO browser_agent_runtime (source_id, last_ingest_at, last_seen_at)
       VALUES ('legacy-source', 1000, 1000);
     `);

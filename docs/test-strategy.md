@@ -4,18 +4,20 @@
 
 ## 1. 测试结论
 
-### 1.1 当前稳定承诺
+### 1.1 当前目录与支持承诺
 
 发布门禁必须证明：
 
-1. 北京协和医院东单院区皮肤科公开排班可被规范化，baseline 后的新排班只产生 `schedule_released`；排班不被写成实时有号。
-2. 北京同仁医院崇文门院区鼻科只创建 C 级规则提醒；医生、职称、时段和实时状态条件不参与判断。
-3. 任务日期同时限制为北京时间 today..+14d（含两端）且连续最多 14 个自然日；客户端提示与 API 校验一致。
-4. 规则提醒可持久恢复、按 scope reconciliation，并且失败重试不越过 `occurrenceAt`。
-5. 通知渠道只有成功 claim 到 `sending` 后才能发送/回写；规则变更终态不会被并发投递覆盖。
-6. 来源异常、停机和休眠恢复不会制造假事件；超过来源有效最小间隔 2 倍才静默重建 baseline（协和当前为 4 小时 grace）。
-7. migration、实例锁、备份与恢复、Origin/Host、官方域、权限和隐私边界 fail closed。
-8. 全新 checkout 可按锁文件安装、构建、测试和启动，不依赖 Docker、外部数据库、队列或项目后端。
+1. catalog 返回 11 家医院、12 个院区、45 个带 `targetId/support` 的科室；目录顺序稳定，inactive 与 `directory-only` 一律 fail closed。
+2. 北京协和医院东单院区皮肤科 stable 公开排班可被规范化，baseline 后的新排班只产生 `schedule_released`；排班不被写成实时有号。
+3. 北京安贞医院朝阳院区冠心病中心、心律失常中心必须按同一 experimental manifest 的两个精确 binding 隔离，只产生 `schedule_released`；其余安贞科室仍为 `directory-only`。
+4. 北京同仁医院崇文门院区鼻科只创建 rules-only 提醒；医生、职称、时段和实时状态条件不参与判断。
+5. 任务日期同时限制为北京时间 today..+14d（含两端）且连续最多 14 个自然日；客户端提示与 API 校验一致。
+6. 规则提醒可持久恢复、按 scope reconciliation，并且失败重试不越过 `occurrenceAt`。
+7. 通知渠道只有成功 claim 到 `sending` 后才能发送/回写；规则变更终态不会被并发投递覆盖。
+8. 来源异常、停机和休眠恢复不会制造假事件；超过来源有效最小间隔 2 倍才静默重建 baseline（协和当前为 4 小时 grace）。
+9. migration、实例锁、备份与恢复、Origin/Host、官方域、权限和隐私边界 fail closed。
+10. 全新 checkout 可按锁文件安装、构建、测试和启动，不依赖 Docker、外部数据库、队列或项目后端。
 
 ### 1.2 实验能力及其升级门槛
 
@@ -53,7 +55,7 @@
 | live/真实渠道 | 官方来源、真实设备、低频观察 | 维护者显式执行；不进入普通 fork/CI |
 | E3/soak | 自然实时变化与长期运行 | 仅实时能力升稳时 |
 
-普通 CI 和 E2E 必须设置 `EASY_HOSPITAL_DISABLE_LIVE_SOURCES=1`，移除真实通知配置和 Browser Agent token，并阻断服务器端与浏览器端非 loopback 请求。
+普通 CI 和 E2E 不得访问真实医院来源。Playwright E2E 会装配生产来源 manifest，以覆盖 public-source 的严格 admission；这只验证 runtime binding，不构成真实来源验证。`tests/e2e/server-guard.mjs` 会在调用原始 `fetch` 前阻断服务器所有非 loopback 请求，并通过状态计数断言非 loopback 请求零放行；浏览器端同样拦截并断言无外联，通知、SMTP 和 Browser Agent 凭据保持清空。
 
 ## 4. 稳定领域门禁
 
@@ -66,20 +68,27 @@
 - 重复快照、无语义变化和不匹配任务条件不重复产生事件。
 - 通知正文写“新排班已发布/排班不代表可预约状态”，不得写实时有号、库存或退号。
 
-### 4.2 同仁 C 级规则提醒
+### 4.2 安贞 experimental 公开排班
+
+- manifest 必须携带 `sourceId`、`stability=experimental` 与两个唯一 binding，official entry 严格落在 allowlist 域。
+- 冠心病中心与心律失常中心 observation 按 target、日期、时段、医生和职称过滤，不得跨 scope。
+- parser 只接受官方心脏内科医学中心周排班结构；目标科室上下文缺失、WAF、登录墙、异常 Content-Type、越界重定向和结构漂移全部 fail closed。
+- 实验标签不影响任务基本可用，但 UI 与通知不得写实时余号、退号或自动预约。
+
+### 4.3 同仁 rules-only 提醒
 
 - UI 隐藏医生/职称/时段及实验事件条件，并提交规范化 payload。
 - API 对不符合 `any_expert`、空医生/职称、`ANY`、只含 `schedule_released`、非空提醒分钟的 payload 返回 `SOURCE_POLICY_VIOLATION`；不得静默接受或转换。
 - 通知使用“预计放号/规则提醒”，不声称检测到新排班或可用号源。
 - 规则官方入口、证据 URL、核验日期和需复核状态来自当前规则。
 
-### 4.3 日期与北京时间
+### 4.4 日期与北京时间
 
 - 创建、修改日期或重新启用任务时，范围必须同时满足北京时间 today..+14d（含两端），以及开始到结束连续最多 14 个自然日。
 - 分别覆盖窗口边界与跨度边界：today→today+13 合法，today→today+14 因连续 15 个自然日而拒绝，today+1→today+14 合法；同时覆盖北京时间/UTC 跨日、月末、年末、闰日和机器 `TZ` 不同的场景。
 - UI 日期测试冻结系统时间，预期使用独立的固定日期字面量，不从生产 helper 反算。
 
-### 4.4 空窗与 baseline
+### 4.5 空窗与 baseline
 
 - 正常约 1× 间隔轮询不重建 baseline。
 - 上次 attempt 到当前检查超过 2× 有效最小间隔时，删除该 scope 的监测 baseline，本轮静默重建；审计状态保留。
@@ -116,22 +125,22 @@
 
 ### 6.1 每次 PR 的数据库门禁
 
-- 空数据库执行 migration 1–17；重复打开幂等。
+- 空数据库执行 migration 1–18；重复打开幂等。
 - 已应用 migration 的 version/name/checksum 连续且与 manifest 一致；历史 SQL 或记录被改写时 fail closed。
 - 真实磁盘 SQLite 启用外键、WAL、同步与 busy timeout；测试结束关闭句柄并清理 WAL/SHM。
 - 数据目录/备份/rollback 目录在 POSIX 为 `0700`，数据库、WAL/SHM、备份/rollback 文件为 `0600`。
 - 第二实例和人工 restore 共用同一数据库实例锁；活进程锁拒绝、可确认死 PID stale lock 安全回收、损坏/竞态锁 fail closed。
 
-### 6.2 v16 → v17 RC 演练
+### 6.2 v17 → v18 RC 演练
 
-涉及 migration 17 的稳定候选必须在**临时副本**完成：
+涉及 migration 18 的稳定候选必须在**临时副本**完成；另保留 migration 14 真实旧 catalog schema 直升当前版本的兼容 fixture，禁止让生产 migration 宽松吞掉缺表：
 
-1. 准备通过 integrity/manifest 校验的 schema v16 脱敏数据库，包含规则、任务、Job、批次与通知状态；
-2. 启动候选，确认 migration 前自动创建 `migration-v16-to-v17` 一致性备份并通过只读验证；
-3. migration 17 只新增 `hospital_domain` 及正确的 `official`/`evidence` 种子，原业务数据和状态不丢失；
-4. 重启候选，确认 checksum 幂等、规则 URL 校验和未来调度正常；
-5. 完全停机后调用 `restoreDatabaseBackup`，确认它取得共享实例锁、保存 rollback、原子恢复 v16 备份并清理 WAL/SHM；
-6. 再次启动候选，确认会重新备份并迁移到 v17；
+1. 准备通过 integrity/manifest 校验的 schema v17 脱敏数据库，包含两家既有 catalog、规则、任务、Job、批次与通知状态；
+2. 启动候选，确认 migration 前自动创建 `migration-v17-to-v18` 一致性备份并通过只读验证；
+3. migration 18 只追加目录排序、target support、41 个新目录 target 与 `source_scope_runtime`，原业务数据和状态不丢失；
+4. 重启候选，确认 checksum 幂等、11 家/45 target 顺序与 support 准确；
+5. 完全停机后调用 `restoreDatabaseBackup`，确认它取得共享实例锁、保存 rollback、原子恢复 v17 备份并清理 WAL/SHM；
+6. 再次启动候选，确认会重新备份并迁移到 v18；
 7. 全程扫描备份、rollback、日志和输出，不含真实凭据或机器专属公开信息。
 
 不得在用户唯一数据库或运行中的真实实例上做演练。
@@ -167,10 +176,10 @@
 
 E2E 必须用真实 Chromium 和真实本地应用，但只使用隔离数据与 loopback：
 
-1. 查看协和公开排班能力边界和同仁规则；
+1. 浏览 11 家医院目录，核对协和 stable、安贞两个 experimental、同仁 rules-only 与其余 directory-only；
 2. 创建、编辑、启停任务，刷新后证明数据来自 SQLite；
 3. 触发脱敏 fixture 的 `schedule_released`，确认通知文案不声称有号；
-4. 创建同仁 C 级规则提醒，确认实时条件不可选；
+4. 创建同仁 rules-only 提醒，确认实时条件不可选；选择 directory-only target 时提交禁用且 HTTPS 官网可打开；
 5. 重放、重启和删除后不产生重复/陈旧通知；
 6. 来源失败显示 `unknown`、最后成功和最近失败；
 7. 官方入口属于允许域，打开后停止，不进行登录或预约操作。
@@ -202,7 +211,7 @@ npm audit --omit=dev --registry=https://registry.npmjs.org
 - 使用候选 commit 的临时 copy，不复用工作区 `node_modules`、构建产物、数据目录、环境变量或后台进程。
 - `npm ci --ignore-scripts` 用于验证锁文件本身可解析且不会改工作树；正式构建/运行依赖原生模块时，再按公开安装流程执行正常 `npm ci`。
 - 检查 lockfile 的根版本与 `package.json` 一致；每个非空 `resolved` 都必须是合法 URL 且 hostname 严格等于 `registry.npmjs.org`。
-- 执行 build、release metadata、production smoke 和 v16→v17 演练；清理临时数据和密钥。
+- 执行 build、release metadata、production smoke 和 v17→v18 演练；清理临时数据和密钥。
 
 ## 9. 实验实时号源门禁
 
@@ -229,9 +238,9 @@ npm audit --omit=dev --registry=https://registry.npmjs.org
 | ID | 当前优先级 | 验收项 | 放行标准 |
 |---|---|---|---|
 | ST-01 | 稳定阻塞 | 版本与锁文件 | package/lock 同步、CHANGELOG 有版本、官方 registry resolved、`npm ci` 不改树 |
-| ST-02 | 稳定阻塞 | migration 1–17 | 空库、checksum、v16→v17 备份/迁移/重启/恢复通过 |
-| ST-03 | 稳定阻塞 | 协和新排班 | baseline、`schedule_released`、空窗恢复和诚实文案通过 |
-| ST-04 | 稳定阻塞 | 同仁规则提醒 | C 级规范化/API 拒绝、occurrence deadline、当前规则接管通过 |
+| ST-02 | 稳定阻塞 | migration 1–18 | 空库、checksum、v17→v18 备份/迁移/重启/恢复与 v14 真实旧 schema 兼容 fixture 通过 |
+| ST-03 | 稳定阻塞 | 协和与安贞公开排班 | stable/experimental binding、baseline、`schedule_released`、空窗恢复和诚实文案通过 |
+| ST-04 | 稳定阻塞 | 同仁规则与目录 fail-closed | rules-only 规范化/API 拒绝、occurrence deadline、directory-only 禁止创建通过 |
 | ST-05 | 稳定阻塞 | 通知一致性 | delivery claim、批次终态、重试截止和重启恢复通过 |
 | ST-06 | 稳定阻塞 | 数据库安全 | 共享实例锁、integrity、权限、备份/rollback 通过 |
 | ST-07 | 稳定阻塞 | HTTP/出网 | Host/Origin/client header、URL 域、5xx 脱敏和 loopback 隔离通过 |

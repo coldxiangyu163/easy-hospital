@@ -1,16 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import type { ReleaseRule } from '../core/release-rule.js';
-import type { SourceAdapter } from '../core/source-adapter.js';
+import { targetSupportsRuleReminders } from '../core/target-support.js';
+import {
+  findSourceBinding,
+  isBoundSourceManifest,
+  type SourceAdapter,
+} from '../core/source-adapter.js';
 import type { WatchTask } from '../core/watch-task.js';
+import { resolveCatalogScope } from './catalog.js';
 import type { SqliteDatabase } from './database.js';
 import type { SqliteJobRunner } from './job-runner.js';
 import { failReleaseReminderBatchesForRule } from './notification-outbox.js';
 import { listReleaseRules } from './release-rules.js';
 import { sourceMinimumIntervalMs } from './source-runtime.js';
 import { listWatchTasks } from './watch-tasks.js';
-
-const PUMCH_ADAPTER_KEY = 'pumch-public-dermatology-schedule';
 
 type ReleaseRuleScope = {
   hospitalId: string;
@@ -56,58 +60,81 @@ export function createSourceScopeKey(input: {
     .digest('hex');
 }
 
+export type WatchTaskSchedulingResult = {
+  status:
+    | 'scheduled'
+    | 'inactive'
+    | 'unsupported-target'
+    | 'source-unavailable'
+    | 'rule-unavailable'
+    | 'not-scheduled';
+};
+
 export function scheduleWatchTask(
   database: SqliteDatabase,
   runner: SqliteJobRunner,
   task: WatchTask,
   adapters: Map<string, SourceAdapter>,
   now: number,
-): void {
-  if (!task.enabled) return;
+): WatchTaskSchedulingResult {
+  if (!task.enabled) return { status: 'inactive' };
 
-  const pumchAdapter = adapters.get(PUMCH_ADAPTER_KEY);
-  if (
-    pumchAdapter &&
-    task.hospitalId === 'hospital-pumch' &&
-    task.departmentId === 'department-pumch-dermatology'
-  ) {
-    const scope = {
-      adapterKey: PUMCH_ADAPTER_KEY,
-      sourceId: 'source-pumch-public-schedule',
-      hospitalId: task.hospitalId,
-      campusId: task.campusId,
-      departmentId: task.departmentId,
-    };
-    const scopeKey = createSourceScopeKey(scope);
-    if (!runner.hasActiveSourceScopeJob(scopeKey)) {
+  const target = resolveCatalogScope(database, task);
+  if (!target || !target.support.canCreateWatchTask) {
+    return { status: 'unsupported-target' };
+  }
+
+  if (target.support.supportMode === 'public-source') {
+    let sourceBound = false;
+    for (const adapter of adapters.values()) {
+      if (!isBoundSourceManifest(adapter.manifest)) continue;
+      const binding = findSourceBinding(adapter.manifest, {
+        targetId: target.targetId,
+        hospitalId: task.hospitalId,
+        campusId: task.campusId,
+        departmentId: task.departmentId,
+      });
+      if (!binding) continue;
+      sourceBound = true;
+
+      const scope = {
+        adapterKey: adapter.manifest.adapterKey,
+        sourceId: adapter.manifest.sourceId,
+        hospitalId: binding.hospitalId,
+        campusId: binding.campusId,
+        departmentId: binding.departmentId,
+      };
+      const scopeKey = createSourceScopeKey(scope);
+      if (runner.hasActiveSourceScopeJob(scopeKey)) continue;
       runner.enqueue({
         type: 'source-check',
         payload: {
           ...scope,
           scopeKey,
-          minIntervalMs: sourceMinimumIntervalMs(
-            PUMCH_ADAPTER_KEY,
-            pumchAdapter.manifest.minIntervalMs,
-          ),
+          // 单域所有 binding 串行轮转；每个 scope 的有效周期按 binding 数扩展，
+          // 避免第一个 scope 的 recurrence 与被节流 scope 同时到期而长期饿死后者。
+          minIntervalMs:
+            sourceMinimumIntervalMs(adapter.manifest.minIntervalMs) *
+            adapter.manifest.bindings.length,
         },
         runAt: now,
         dedupeKey: `source-check:${scopeKey}:${now}:${randomUUID()}`,
         maxAttempts: 3,
       });
     }
+    return { status: sourceBound ? 'scheduled' : 'source-unavailable' };
   }
 
   if (
-    task.hospitalId !== 'hospital-tongren' ||
-    task.departmentId !== 'department-tongren-rhinology' ||
+    !targetSupportsRuleReminders(target.support) ||
     task.remindBeforeMinutes === null ||
     !task.eventTypes.includes('schedule_released')
   ) {
-    return;
+    return { status: 'not-scheduled' };
   }
 
   const rule = getEnabledReleaseRuleForScope(database, task);
-  if (!rule) return;
+  if (!rule) return { status: 'rule-unavailable' };
 
   const shifted = new Date(now + 8 * 60 * 60 * 1_000);
   const [hour, minute] = rule.releaseTimeLocal.split(':').map(Number) as [number, number];
@@ -149,7 +176,9 @@ export function scheduleWatchTask(
       .get(task.id, occurrenceAt, targetDate, rule.officialEntryUrl);
     if (existingBatch) continue;
 
-    if (runner.hasActiveTaskJob('release-reminder', task.id, task.version)) return;
+    if (runner.hasActiveTaskJob('release-reminder', task.id, task.version)) {
+      return { status: 'scheduled' };
+    }
     // dedupeKey 含目标日期与官方入口哈希：规则改 advanceDays 或 URL 后，
     // 同 occurrence 的重排不会被旧 job（含已 complete 的）占住 dedupe 位。
     const urlHash = createHash('sha256')
@@ -172,8 +201,9 @@ export function scheduleWatchTask(
       dedupeKey: `release-reminder:${task.id}:${task.version}:${rule.id}:${occurrenceAt}:${targetDate}:${urlHash}`,
       maxAttempts: 4,
     });
-    break;
+    return { status: 'scheduled' };
   }
+  return { status: 'not-scheduled' };
 }
 
 // 运行中 job 的规则一致性校验：payload 快照必须与当前 rule 计算出的

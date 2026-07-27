@@ -6,21 +6,24 @@
 
 ## 当前承诺
 
-首版只承诺两条真实能力：
+截至 **2026-07-27**，catalog 提供 11 家医院、12 个院区、45 个科室 target 的可浏览目录。目录范围不等于监测范围，任务创建由每个 target 的 `supportMode` 与 `canCreateWatchTask` fail closed 控制：
 
-| 目标 | 当前能力 | 不承诺 |
-|---|---|---|
-| 北京协和医院公开皮肤科排班 | 读取无需登录的官方公开排班，仅识别新排班发布并产生 `schedule_released` 类提醒 | 排班移除或取消、实时余号、可预约数量、从无号变有号、退号 |
-| 北京同仁医院崇文门院区鼻科 | 保存一条研究所得、标记为需人工复核的放号规则，在预计时间前提醒，并提供官方预约或候补入口 | 把该规则当作医院当前承诺、自动读取小程序号源、实时有号、退号监控 |
+| 精确 target | 当前支持级别 | 可创建任务 | 不承诺 |
+|---|---|---:|---|
+| 北京协和医院 · 东单院区 · 皮肤科 | `public-source`，`stable`，官方公开排班 | 是，只订阅 `schedule_released` | 排班移除、实时余号、可预约数量、从无号变有号、退号 |
+| 北京安贞医院 · 朝阳院区 · 冠心病中心 | `public-source`，`experimental`，官方心脏内科医学中心排班 | 是，只订阅 `schedule_released` | 实验来源长期稳定性、实时余号、退号、自动预约 |
+| 北京安贞医院 · 朝阳院区 · 心律失常中心 | `public-source`，`experimental`，与上项共用受限官方来源 | 是，只订阅 `schedule_released` | 实验来源长期稳定性、实时余号、退号、自动预约 |
+| 北京同仁医院 · 崇文门院区 · 鼻科 | `rules-only`，规则需人工复核 | 是，只创建规则提醒 | 把规则当作医院当前承诺、实时排班/余号/退号 |
+| 人民、北医三院、积水潭、阜外、北大一院、天坛、北京儿童、医科院肿瘤，以及安贞其余目录 target | `directory-only` | 否，只能浏览目录并打开 HTTPS 医院官网 | 已启用、可监测、存在候选来源即可支持 |
 
-排班不等于号源。看到医生有出诊安排，只能说明官方页面公开了排班，不能推断当前可以预约。
+排班不等于号源。看到医生有出诊安排，只能说明官方页面公开了排班，不能推断当前可以预约。来源 scout 的候选或静态页面只有在严格 manifest binding、解析、失败降级和测试全部通过后，才会升级 target 支持级别。
 
 测试夹具可以演示“有号”“无号”和“疑似退号回流”的状态机，但夹具只用于测试。界面、通知和文档不得把测试结果写成真实医院状态。
 
 ## 能做什么
 
-- 查看医院、院区、科室的放号规则、官方来源、核验时间和可信度。
-- 创建连续最多 14 天的关注任务；协和公开排班可按医生、日期、时段和院区筛选，当前不支持按职称筛选。
+- 浏览 11 家医院的医院、院区和科室目录，查看每个 target 的真实支持级别；`directory-only` 仍可打开 HTTPS 医院官网。
+- 只为 `canCreateWatchTask=true` 的精确 target 创建连续最多 14 天的关注任务；当前新任务只订阅公开排班发布或规则提醒。
 - 在已核验的常规放号时间前 5 分钟提醒。
 - 低频检查受支持的官方公开排班页，识别新排班发布并记录来源健康状态。
 - 通过当前生产装配的 macOS 本机通知、Bark 和 SMTP 发送提醒；同时启用多个渠道时，每个渠道都会发送，不是主备切换。
@@ -133,7 +136,7 @@ npm run dev
 
 ## SQLite 完整性、迁移备份与恢复
 
-打开已有磁盘数据库时，应用会先执行 SQLite `integrity_check`，再验证 migration 1–17 的版本、名称和 checksum；数据库损坏、迁移记录被篡改或历史 migration 被改写时会 fail closed，不会自动覆盖或恢复原库。migration 17 以数据库中的 `hospital_domain` 统一维护预约入口的 official 域和规则证据的 evidence 域。存在待执行 migration 时，应用先通过 `VACUUM INTO` 在数据目录的 `backups/` 下创建一致性备份并验证，只保留最近 5 份；新库和 `:memory:` 数据库不创建迁移备份。
+打开已有磁盘数据库时，应用会先执行 SQLite `integrity_check`，再验证 migration 1–18 的版本、名称和 checksum；数据库损坏、迁移记录被篡改或历史 migration 被改写时会 fail closed，不会自动覆盖或恢复原库。migration 17 以数据库中的 `hospital_domain` 统一维护预约入口的 official 域和规则证据的 evidence 域；migration 18 新增 11 家目录、target support 字段与 scope runtime。存在待执行 migration 时，应用先通过 `VACUUM INTO` 在数据目录的 `backups/` 下创建一致性备份并验证，只保留最近 5 份；新库和 `:memory:` 数据库不创建迁移备份。
 
 恢复永远是停机后的人工操作。公开 storage helper 会先验证所选备份，把当前主库及现存 WAL/SHM 另存到 `corrupt/`，再以同目录原子替换方式恢复；它不会在启动失败时自动恢复。完整命令和核验步骤见 [`docs/configuration.md`](docs/configuration.md#人工备份与恢复)。
 
@@ -148,7 +151,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-真实来源检查和真实通知不应在普通 CI 或外部贡献者的 Fork 中运行。Playwright webServer 固定设置 `EASY_HOSPITAL_DISABLE_LIVE_SOURCES=1`，生产 runtime 只在该值精确为 `1` 时注入空来源适配器；E2E 还会阻断并断言浏览器没有非 loopback 请求。Fixture 测试证明解析和数据流可以重复执行，不证明医院页面当前可访问，也不证明当前有号。
+真实来源检查和真实通知不应在普通 CI 或外部贡献者的 Fork 中运行。Playwright E2E 会装配生产来源 manifest，以覆盖 public-source 的严格 admission；这只验证 runtime binding，不构成真实来源验证。`tests/e2e/server-guard.mjs` 会在调用原始 `fetch` 前阻断服务器所有非 loopback 请求，并通过状态计数断言非 loopback 请求零放行；浏览器端同样拦截并断言无外联，通知、SMTP 和 Browser Agent 凭据保持清空。Fixture 测试证明解析和数据流可以重复执行，不证明医院页面当前可访问，也不证明当前有号。
 
 每次稳定 Release 前，上述命令都必须在全新 checkout 中通过；普通 E2E 截图写入被忽略的 Playwright 输出目录，不改动仓库。只有维护者明确执行 `UPDATE_UI_ARTIFACTS=1 npm run test:e2e` 才刷新 `artifacts/ui/`。真实来源 live probe 只能由维护者显式执行，且受持久化两小时冷却限制。
 
@@ -176,7 +179,7 @@ npm run test:e2e
 
 ## 官方预约边界
 
-本项目与北京协和医院、北京同仁医院、北京 114、京通及其技术服务商不存在隶属、授权、合作或代理关系。医院、平台名称及商标归各权利人所有，仅用于标识公开信息来源。
+本项目与 catalog 所列医院、北京 114、京通及其技术服务商不存在隶属、授权、合作或代理关系。医院、平台名称及商标归各权利人所有，仅用于标识公开信息来源。
 
 通知中的“新排班已发布”只表示官方公开页面出现了新的医生排班，不代表仍可预约；首版不会把排班移除解释为停诊或退号。实验性 Browser Agent 的任何“有号”状态也只能代表页面在用户主动读取时的可见结果，可能立即失效。最终信息和预约结果以医院、北京 114 或京通官方渠道为准。
 

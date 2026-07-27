@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
+import { pumchCatalog as catalog } from '../support/ui-catalog.js';
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -20,14 +21,6 @@ const task = {
   matchMode: 'any_expert', doctorName: null, titles: [], dateFrom: '2026-07-20', dateTo: '2026-07-26', session: 'AM',
   eventTypes: ['availability_changed_to_available'], remindBeforeMinutes: 5, enabled: true, version: 1,
   createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
-};
-
-const catalog = {
-  hospitals: [{
-    id: 'hospital-pumch', name: '北京协和医院', campuses: [{
-      id: 'campus-pumch-dongdan', name: '东单院区', departments: [{ id: 'department-pumch-dermatology', name: '皮肤科' }],
-    }],
-  }],
 };
 
 const event = {

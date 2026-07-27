@@ -5,9 +5,36 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { CheckResult, SourceAdapter } from '../../src/core/source-adapter.js';
+import type {
+  BoundSourceManifest,
+  CheckResult,
+  SourceAdapter,
+} from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
 import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
+import {
+  recordSourceScopeAttempt,
+  sourceScopeNeedsRebaseline,
+} from '../../src/storage/source-runtime.js';
+
+const pumchBindingManifest = {
+  sourceId: 'source-pumch-public-schedule',
+  rateLimitKey: 'official-html:pumch.cn',
+  eventTypes: ['schedule_released'],
+  stability: 'stable',
+  bindings: [
+    {
+      targetId: 'target-pumch-dermatology',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      officialEntryUrl: 'https://hospital.example/appointment',
+    },
+  ],
+} satisfies Pick<
+  BoundSourceManifest,
+  'sourceId' | 'rateLimitKey' | 'eventTypes' | 'stability' | 'bindings'
+>;
 
 // README 承诺「应用停止、电脑休眠或网络中断期间不会继续监测；恢复后先建立新基线，
 // 不推断离线期间发生过的变化」。runSourceCheck 在记录本次 attempt 前读取
@@ -63,6 +90,7 @@ describe('监测空窗后重建基线（rebaseline）', () => {
       transport: 'fetch',
       allowedHosts: ['hospital.example'],
       minIntervalMs: INTERVAL_MS,
+      ...pumchBindingManifest,
     },
     async check(): Promise<CheckResult> {
       const step = script[Math.min(state.calls, script.length - 1)]!;
@@ -86,6 +114,7 @@ describe('监测空窗后重建基线（rebaseline）', () => {
     app = await buildApp({
       databasePath: join(directory, 'data.sqlite3'),
       sourceAdapters: [makeAdapter(script, state)],
+      browserAgentToken: 'rebaseline-browser-agent-admission-token',
       workerPollMs: 5,
       now: currentNow,
     });
@@ -119,6 +148,30 @@ describe('监测空窗后重建基线（rebaseline）', () => {
     database!
       .prepare('SELECT source_id, established_at FROM monitoring_baseline ORDER BY established_at')
       .all() as Array<{ source_id: string; established_at: number }>;
+
+  it('同一 adapter 的其他 target attempt 不会刷新本 target 的 rebaseline 时钟', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-rebaseline-multi-target-'));
+    database = openDatabase(join(directory, 'data.sqlite3'));
+    recordSourceScopeAttempt(database, {
+      scopeKey: 'scope-a',
+      adapterKey: 'shared-adapter',
+      sourceId: 'shared-source',
+      now: NOW0,
+    });
+    recordSourceScopeAttempt(database, {
+      scopeKey: 'scope-b',
+      adapterKey: 'shared-adapter',
+      sourceId: 'shared-source',
+      now: NOW0 + THRESHOLD_MS,
+    });
+
+    expect(
+      sourceScopeNeedsRebaseline(database, 'scope-a', NOW0 + THRESHOLD_MS + 1, INTERVAL_MS),
+    ).toBe(true);
+    expect(
+      sourceScopeNeedsRebaseline(database, 'scope-b', NOW0 + THRESHOLD_MS + 1, INTERVAL_MS),
+    ).toBe(false);
+  });
 
   it('正常 2h 轮询不误判：基线保留，新增排班照常产生事件', async () => {
     const state = { calls: 0 };
@@ -201,12 +254,12 @@ describe('监测空窗后重建基线（rebaseline）', () => {
     expect(scheduleStates[0]!.first_seen_at).toBe(NOW0);
   });
 
-  it('rebaseline 轮抑制可用性事件但状态照常落库', async () => {
+  it('rebaseline 轮抑制排班发布事件但排班审计状态照常落库', async () => {
     const state = { calls: 0 };
     await startApp(
       [
-        { observations: [{ slotKey: 'slotA', availability: 'unavailable' }] },
-        { observations: [{ slotKey: 'slotA', availability: 'available' }] },
+        { observations: [{ slotKey: 'slotA' }] },
+        { observations: [{ slotKey: 'slotA' }, { slotKey: 'slotB' }] },
       ],
       state,
     );
@@ -216,20 +269,16 @@ describe('监测空窗后重建基线（rebaseline）', () => {
     now += THRESHOLD_MS + 1_000;
     await expect.poll(() => state.calls, { timeout: 1_000 }).toBe(2);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    // unavailable → available 本会产生 availability_changed_to_available，
-    // 但空窗轮必须 0 事件（不把离线期间的差异当作变化）。
     expect(await eventCount()).toBe(0);
 
     await app.close();
     app = undefined;
     database = openDatabase(join(directory!, 'data.sqlite3'));
-    // 状态照常落库：当前可用性已是 available，供下一轮 diff 使用。
-    const availability = database!
-      .prepare(
-        "SELECT availability, current_availability FROM availability_state WHERE slot_key = 'slotA'",
-      )
-      .get() as { availability: string; current_availability: string };
-    expect(availability).toEqual({ availability: 'available', current_availability: 'available' });
+    expect(
+      database!
+        .prepare("SELECT schedule_status FROM schedule_state WHERE slot_key = 'slotB'")
+        .get(),
+    ).toEqual({ schedule_status: 'present' });
   });
 
   it('PARTIAL 空结果在空窗轮仍不能建立基线（p9 守护不被 rebaseline 绕过）', async () => {
@@ -277,6 +326,7 @@ describe('监测空窗后重建基线（rebaseline）', () => {
         transport: 'fetch',
         allowedHosts: ['hospital.example'],
         minIntervalMs: INTERVAL_MS,
+        ...pumchBindingManifest,
       },
       check(): Promise<CheckResult> {
         called = true;

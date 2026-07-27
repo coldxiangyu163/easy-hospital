@@ -6,15 +6,33 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import type {
   NotificationChannel,
   NotificationMessage,
 } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
-import { buildApp } from '../../src/server/app.js';
+import {
+  buildApp as buildBaseApp,
+  type BuildAppOptions,
+} from '../../src/server/app.js';
 import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
 import { SqliteJobRunner } from '../../src/storage/job-runner.js';
 import { prepareDueNotificationJobs } from '../../src/storage/notification-outbox.js';
+
+const pumchAdmissionAdapter: SourceAdapter = {
+  manifest: pumchDermatologyScheduleManifest,
+  async check() {
+    throw new Error('Outbox seam 测试不应运行准入 Adapter');
+  },
+};
+
+const buildApp = (options: BuildAppOptions) =>
+  buildBaseApp({
+    ...options,
+    sourceAdapters: [...(options.sourceAdapters ?? []), pumchAdmissionAdapter],
+    browserAgentToken: 'notification-outbox-browser-agent-token',
+  });
 
 // 事件批次在无渠道或沉睡过久时必须进入诚实终态，而不是永久 collecting 或补发陈旧提醒。
 describe('事件批次诚实终态', () => {

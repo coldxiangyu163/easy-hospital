@@ -287,6 +287,21 @@
   font-size: 13px;
 }
 
+.policyNote code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.inlineOfficialLink {
+  min-height: 40px;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+
 .formFooter {
   margin-top: 28px;
   padding-top: 20px;
@@ -530,6 +545,53 @@
 
 .sourceList {
   border-top: 1px solid var(--line);
+}
+
+.sourceHospital {
+  border-bottom: 1px solid var(--line);
+}
+
+.sourceHospital > summary {
+  min-height: 72px;
+  padding: 14px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.sourceHospital > summary:hover {
+  color: var(--accent);
+}
+
+.sourceHospital > summary > span:first-of-type {
+  min-width: 0;
+  flex: 1;
+}
+
+.sourceHospital > summary strong,
+.sourceHospital > summary small {
+  display: block;
+}
+
+.sourceHospital > summary strong {
+  font: 600 18px/1.45 var(--font-display);
+}
+
+.sourceHospital > summary small {
+  margin-top: 2px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.sourceHospital[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.sourceHospital .sourceRow {
+  padding-left: 20px;
 }
 
 .sourceRow {
@@ -848,6 +910,14 @@
   .settingActions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .sourceHospital > summary {
+    align-items: flex-start;
+  }
+
+  .sourceHospital .sourceRow {
+    padding-left: 0;
   }
 
   .sourceRow {

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { api, type Catalog, type ReleaseRule } from '../api.js';
-import { accessPolicy, targetLabel } from '../catalog.js';
+import { resolveCatalogTarget, supportPresentation } from '../catalog.js';
 import styles from './pages.module.css';
 
 type RulesState =
@@ -85,14 +85,24 @@ export function RulesPage() {
     );
   }
 
-  if (state.rules.length === 0) {
+  const boundRules = state.rules.flatMap((rule) => {
+    const target = resolveCatalogTarget(
+      state.catalog,
+      rule.hospitalId,
+      rule.campusId,
+      rule.departmentId,
+    );
+    return target ? [{ rule, target }] : [];
+  });
+
+  if (boundRules.length === 0) {
     return (
       <section className={styles.statusPanel}>
         <p className={styles.eyebrow}>规则与日历</p>
-        <h1 className={styles.pageTitle}>还没有已记录的放号规则</h1>
-        <p>规则 API 返回为空。你仍可创建关注任务，但系统不会虚构放号时间。</p>
+        <h1 className={styles.pageTitle}>还没有与 catalog target 精确匹配的规则</h1>
+        <p>系统不会把其他医院、院区或科室的规则套到当前 target，也不会虚构放号时间。</p>
         <div className={styles.actions}>
-          <Link className={styles.primaryButton} to="/tasks/new">创建关注任务</Link>
+          <Link className={styles.primaryButton} to="/tasks/new">浏览医院目录</Link>
           <Link className={styles.secondaryButton} to="/sources">查看数据来源</Link>
         </div>
       </section>
@@ -109,8 +119,8 @@ export function RulesPage() {
       </header>
 
       <div className={styles.ruleList}>
-        {state.rules.map((rule) => {
-          const policy = accessPolicy(rule.hospitalId);
+        {boundRules.map(({ rule, target }) => {
+          const policy = supportPresentation(target.department.support);
           const stale = Date.now() - Date.parse(rule.verifiedAt) > 30 * 86_400_000;
           const needsReconfirmation = rule.needsReconfirmation || stale;
           return (
@@ -118,7 +128,7 @@ export function RulesPage() {
               <header className={styles.ruleHeader}>
                 <div>
                   <p className={styles.eyebrow}>{policy.title}</p>
-                  <h2>{targetLabel(state.catalog, rule.hospitalId, rule.campusId, rule.departmentId)}</h2>
+                  <h2>{target.hospital.name} · {target.campus.name} · {target.department.name}</h2>
                 </div>
                 <span className={needsReconfirmation ? styles.statusWarning : styles.statusGood}>
                   {needsReconfirmation ? '需要重新核验' : confidenceLabel(rule.confidence)}
