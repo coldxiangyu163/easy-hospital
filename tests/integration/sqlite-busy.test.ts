@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import { buildApp } from '../../src/server/app.js';
 
 describe('Fastify SQLITE_BUSY mapping', () => {
@@ -23,7 +24,18 @@ describe('Fastify SQLITE_BUSY mapping', () => {
   it('稳定返回 503 且不泄露 SQLite 内部，释放锁后可安全重试', async () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-sqlite-busy-'));
     const databasePath = join(directory, 'data.sqlite3');
-    app = await buildApp({ databasePath, workerPollMs: 60_000 });
+    app = await buildApp({
+      databasePath,
+      sourceAdapters: [
+        {
+          manifest: pumchDermatologyScheduleManifest,
+          async check() {
+            throw new Error('SQLITE_BUSY seam 测试不应运行来源请求');
+          },
+        },
+      ],
+      workerPollMs: 60_000,
+    });
     lockDatabase = new Database(databasePath);
     lockDatabase.exec('BEGIN IMMEDIATE');
     const request = {

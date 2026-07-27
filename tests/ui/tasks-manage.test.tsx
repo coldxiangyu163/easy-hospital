@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
+import { pumchCatalog as catalog } from '../support/ui-catalog.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -14,22 +15,6 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { 'content-type': 'application/json' },
   });
 }
-
-const catalog = {
-  hospitals: [
-    {
-      id: 'hospital-pumch',
-      name: '北京协和医院',
-      campuses: [
-        {
-          id: 'campus-pumch-dongdan',
-          name: '东单院区',
-          departments: [{ id: 'department-pumch-dermatology', name: '皮肤科' }],
-        },
-      ],
-    },
-  ],
-};
 
 const task = {
   id: 'task-1',

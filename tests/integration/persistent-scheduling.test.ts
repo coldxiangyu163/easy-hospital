@@ -5,10 +5,35 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { SourceAdapter } from '../../src/core/source-adapter.js';
+import type {
+  BoundSourceManifest,
+  SourceAdapter,
+} from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
 import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
 import { SqliteJobRunner } from '../../src/storage/job-runner.js';
+import { scheduleWatchTask } from '../../src/storage/scheduling.js';
+import { createWatchTask } from '../../src/storage/watch-tasks.js';
+
+const pumchBindingManifest = {
+  minIntervalMs: 7_200_000,
+  sourceId: 'source-pumch-public-schedule',
+  rateLimitKey: 'official-html:pumch.cn',
+  eventTypes: ['schedule_released'],
+  stability: 'stable',
+  bindings: [
+    {
+      targetId: 'target-pumch-dermatology',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      officialEntryUrl: 'https://pumchapp.pumch.cn/pages/pc/home/index',
+    },
+  ],
+} satisfies Pick<
+  BoundSourceManifest,
+  'minIntervalMs' | 'sourceId' | 'rateLimitKey' | 'eventTypes' | 'stability' | 'bindings'
+>;
 
 describe('WatchTask 持久调度', () => {
   let app: FastifyInstance | undefined;
@@ -32,6 +57,7 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 7_200_000,
+        ...pumchBindingManifest,
       },
       async check() {
         throw new Error('本测试只验证持久调度，不应执行来源请求');
@@ -125,6 +151,204 @@ describe('WatchTask 持久调度', () => {
     expect(runner.claimNext({ now: now + 1_000, leaseMs: 30_000 })).toBeUndefined();
   });
 
+  it('public-source 缺少精确 runtime binding 时调度显式返回 unavailable 且不留 Job', () => {
+    directory = join(tmpdir(), `easy-hospital-scheduling-unavailable-${Date.now()}`);
+    const databasePath = join(directory, 'data.sqlite3');
+    database = openDatabase(databasePath);
+    const runner = new SqliteJobRunner(database);
+    const task = createWatchTask(database, {
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      matchMode: 'any_expert',
+      doctorName: null,
+      titles: [],
+      dateFrom: '2026-07-27',
+      dateTo: '2026-08-02',
+      session: 'ANY',
+      eventTypes: ['schedule_released'],
+      remindBeforeMinutes: null,
+    });
+
+    expect(scheduleWatchTask(database, runner, task, new Map(), Date.now())).toEqual({
+      status: 'source-unavailable',
+    });
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM job WHERE type = 'source-check'").get(),
+    ).toEqual({ count: 0 });
+  });
+
+  it('scheduler 对相同物理 scope 的错误 targetId fail closed，正确 targetId 才生成 Job', () => {
+    directory = join(tmpdir(), `easy-hospital-scheduling-target-${Date.now()}`);
+    const databasePath = join(directory, 'data.sqlite3');
+    database = openDatabase(databasePath);
+    const runner = new SqliteJobRunner(database);
+    const task = createWatchTask(database, {
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      matchMode: 'any_expert',
+      doctorName: null,
+      titles: [],
+      dateFrom: '2026-07-27',
+      dateTo: '2026-08-02',
+      session: 'ANY',
+      eventTypes: ['schedule_released'],
+      remindBeforeMinutes: null,
+    });
+    const adapterForTarget = (targetId: string): SourceAdapter => ({
+      manifest: {
+        adapterKey: 'pumch-public-dermatology-schedule',
+        contractVersion: 1,
+        version: '1.0.0-target-test',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
+        ...pumchBindingManifest,
+        bindings: pumchBindingManifest.bindings.map((binding) => ({
+          ...binding,
+          targetId,
+        })),
+      },
+      async check() {
+        throw new Error('本测试只验证 targetId 调度，不应执行来源请求');
+      },
+    });
+
+    expect(
+      scheduleWatchTask(
+        database,
+        runner,
+        task,
+        new Map([
+          [
+            'pumch-public-dermatology-schedule',
+            adapterForTarget('target-wrong-pumch-dermatology'),
+          ],
+        ]),
+        Date.now(),
+      ),
+    ).toEqual({ status: 'source-unavailable' });
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM job WHERE type = 'source-check'").get(),
+    ).toEqual({ count: 0 });
+
+    expect(
+      scheduleWatchTask(
+        database,
+        runner,
+        task,
+        new Map([
+          [
+            'pumch-public-dermatology-schedule',
+            adapterForTarget('target-pumch-dermatology'),
+          ],
+        ]),
+        Date.now(),
+      ),
+    ).toEqual({ status: 'scheduled' });
+    expect(
+      database.prepare("SELECT COUNT(*) AS count FROM job WHERE type = 'source-check'").get(),
+    ).toEqual({ count: 1 });
+  });
+
+  it('调度从 manifest binding 自动生成，新增 adapter 不需要医院分支', async () => {
+    const now = Date.parse('2026-07-27T00:00:00.000Z');
+    const adapter: SourceAdapter = {
+      manifest: {
+        adapterKey: 'fixture-third-binding-adapter',
+        contractVersion: 1,
+        version: '1.0.0-test',
+        accessClass: 'A',
+        transport: 'fetch',
+        allowedHosts: ['www.anzhen.org.cn'],
+        minIntervalMs: 43_200_000,
+        sourceId: 'source-fixture-third-binding',
+        rateLimitKey: 'official-html:fixture-third-binding',
+        eventTypes: ['schedule_released'],
+        stability: 'experimental',
+        bindings: [
+          {
+            targetId: 'target-anzhen-coronary-heart-disease-center',
+            hospitalId: 'hospital-anzhen',
+            campusId: 'campus-anzhen-chaoyang',
+            departmentId: 'department-anzhen-coronary-heart-disease-center',
+            officialEntryUrl:
+              'https://www.anzhen.org.cn/Html/Departments/Main/SearchIndex_118.html',
+          },
+        ],
+      },
+      async check() {
+        throw new Error('本测试只验证 binding 调度，不应执行来源请求');
+      },
+    };
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-binding-scheduling-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    app = await buildApp({
+      databasePath,
+      sourceAdapters: [adapter],
+      workerPollMs: 60_000,
+      now: () => now,
+      enforceWatchTaskPolicy: true,
+    });
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1' },
+      payload: {
+        hospitalId: 'hospital-anzhen',
+        campusId: 'campus-anzhen-chaoyang',
+        departmentId: 'department-anzhen-coronary-heart-disease-center',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-27',
+        dateTo: '2026-08-02',
+        session: 'ANY',
+        eventTypes: ['schedule_released'],
+        remindBeforeMinutes: 5,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const unsupportedEvent = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1' },
+      payload: {
+        hospitalId: 'hospital-anzhen',
+        campusId: 'campus-anzhen-chaoyang',
+        departmentId: 'department-anzhen-coronary-heart-disease-center',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-27',
+        dateTo: '2026-08-02',
+        session: 'ANY',
+        eventTypes: ['availability_changed_to_available'],
+        remindBeforeMinutes: 5,
+      },
+    });
+    expect(unsupportedEvent.statusCode).toBe(400);
+    expect(unsupportedEvent.json()).toEqual({ error: 'SOURCE_EVENT_TYPE_NOT_AVAILABLE' });
+
+    await app.close();
+    app = undefined;
+    database = openDatabase(databasePath);
+    const job = new SqliteJobRunner(database).claimNext({ now: now + 1, leaseMs: 30_000 });
+    expect(job).toMatchObject({
+      type: 'source-check',
+      payload: {
+        adapterKey: 'fixture-third-binding-adapter',
+        sourceId: 'source-fixture-third-binding',
+        hospitalId: 'hospital-anzhen',
+        campusId: 'campus-anzhen-chaoyang',
+        departmentId: 'department-anzhen-coronary-heart-disease-center',
+        minIntervalMs: 43_200_000,
+      },
+    });
+  });
+
   it('LocalWorker 用活动任务日期 union 执行无筛选宽查询，并全局至少间隔两小时', async () => {
     const now = Date.parse('2026-07-19T00:00:00.000Z');
     const adapterMinIntervalMs = 300_000;
@@ -140,6 +364,7 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: adapterMinIntervalMs,
+        ...pumchBindingManifest,
       },
       async check(request) {
         calls += 1;
@@ -275,6 +500,7 @@ describe('WatchTask 持久调度', () => {
   });
 
   it('重启时从 SQLite 活跃 WatchTask 补建缺失的 source-check Job', async () => {
+    const now = Date.parse('2026-07-19T00:00:00.000Z');
     let calls = 0;
     const adapter: SourceAdapter = {
       manifest: {
@@ -285,13 +511,14 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 300_000,
+        ...pumchBindingManifest,
       },
       async check() {
         calls += 1;
         return {
           status: 'OK',
-          observedAt: new Date().toISOString(),
-          nextAllowedAt: new Date(Date.now() + 300_000).toISOString(),
+          observedAt: new Date(now).toISOString(),
+          nextAllowedAt: new Date(now + 300_000).toISOString(),
           contentHash: 'd'.repeat(64),
           observations: [],
         };
@@ -303,6 +530,7 @@ describe('WatchTask 持久调度', () => {
       databasePath,
       sourceAdapters: [adapter],
       workerPollMs: 60_000,
+      now: () => now,
     });
     await app.inject({
       method: 'POST',
@@ -327,9 +555,9 @@ describe('WatchTask 持久调度', () => {
 
     database = openDatabase(databasePath);
     const runner = new SqliteJobRunner(database);
-    const orphaned = runner.claimNext({ now: Date.now() + 1_000, leaseMs: 30_000 });
+    const orphaned = runner.claimNext({ now: now + 1_000, leaseMs: 30_000 });
     expect(orphaned?.type).toBe('source-check');
-    runner.complete(orphaned!.id, Date.now() + 1_001);
+    runner.complete(orphaned!.id, now + 1_001);
     database.close();
     database = undefined;
 
@@ -337,6 +565,7 @@ describe('WatchTask 持久调度', () => {
       databasePath,
       sourceAdapters: [adapter],
       workerPollMs: 5,
+      now: () => now,
     });
     await expect.poll(() => calls, { timeout: 1_000 }).toBe(1);
   });
@@ -353,6 +582,7 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 300_000,
+        ...pumchBindingManifest,
       },
       async check(request) {
         calls += 1;
@@ -443,6 +673,7 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 300_000,
+        ...pumchBindingManifest,
       },
       async check() {
         calls += 1;
@@ -516,6 +747,7 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 300_000,
+        ...pumchBindingManifest,
       },
       async check() {
         calls += 1;
@@ -553,7 +785,7 @@ describe('WatchTask 持久调度', () => {
     expect(
       database
         .prepare(
-          "SELECT last_status, last_error_code FROM source_runtime WHERE adapter_key = 'pumch-public-dermatology-schedule'",
+          "SELECT last_status, last_error_code FROM source_runtime WHERE adapter_key = 'official-html:pumch.cn'",
         )
         .get(),
     ).toEqual({
@@ -583,6 +815,7 @@ describe('WatchTask 持久调度', () => {
         transport: 'fetch',
         allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
         minIntervalMs: 300_000,
+        ...pumchBindingManifest,
       },
       async check() {
         calls += 1;

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import type { NotificationChannel } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
@@ -77,7 +78,18 @@ describe('写 API Origin 边界', () => {
 
   it('带 Origin 的管理写请求只接受 loopback origin', async () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-origin-'));
-    app = await buildApp({ databasePath: join(directory, 'data.sqlite3') });
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      sourceAdapters: [
+        {
+          manifest: pumchDermatologyScheduleManifest,
+          async check() {
+            throw new Error('Origin seam 测试不应运行来源请求');
+          },
+        },
+      ],
+      workerPollMs: 60_000,
+    });
     const payload = {
       hospitalId: 'hospital-pumch',
       campusId: 'campus-pumch-dongdan',

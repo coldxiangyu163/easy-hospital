@@ -4,7 +4,7 @@
 >
 > 产品形态：稳定开源、单用户、仅本地运行
 >
-> 当前稳定来源：协和公开排班 `schedule_released`；同仁 C 级规则提醒
+> 当前范围：11 家目录；协和 stable public-source；安贞两个 experimental public-source；同仁 rules-only；其余 directory-only
 
 ## 1. 决策摘要
 
@@ -24,9 +24,11 @@ npm start
 
 | 来源 | 等级 | transport | 稳定能力 |
 |---|---|---|---|
-| 北京协和医院东单院区皮肤科公开排班 | A | `fetch`，必要时受控 Playwright 渲染 | 低频检查公开排班，只产生 `schedule_released` |
-| 北京同仁医院崇文门院区鼻科 | C | `rules-only` | 已核验规则和放号前提醒，不运行号源检查 |
-| Browser Agent | B | 本机扩展 observation | 实验/P1，默认关闭 |
+| 北京协和医院东单院区皮肤科公开排班 | `public-source` / A / `stable` | `fetch` | 低频检查严格 binding 的公开排班，只产生 `schedule_released` |
+| 北京安贞医院朝阳院区冠心病中心、心律失常中心 | `public-source` / A / `experimental` | `fetch`，同域两个 binding 串行 | 官方心脏内科医学中心排班，只产生 `schedule_released` |
+| 北京同仁医院崇文门院区鼻科 | `rules-only` / C | `rules-only` | 需复核规则和放号前提醒，不运行号源检查 |
+| 其余 41 个 target | `directory-only` | 无自动来源 | 只浏览目录与 HTTPS 医院官网，禁止创建/恢复任务 |
+| Browser Agent | B | 本机扩展 observation | 实验/P1，默认关闭；11 家目录不扩大其 scope |
 
 `availability_changed_to_available` 和 `cancellation_slot_detected` 的状态机、存储与实验 UI 存在，但没有真实医院稳定声明。架构不能把测试 fixture 或 B 级 observation 写成实时余号/退号承诺。
 
@@ -116,7 +118,8 @@ SQLite 使用外键、`CHECK`、唯一索引和短事务。时间持久化为 UT
 
 - migration 1–15 是历史 schema；
 - migration 16 建立历史 migration checksum 基线；
-- migration 17 `hospital-domain-policy` 新增 `hospital_domain(hospital_id, domain, kind)`，`kind` 只允许 `official` 或 `evidence`。
+- migration 17 `hospital-domain-policy` 新增 `hospital_domain(hospital_id, domain, kind)`，`kind` 只允许 `official` 或 `evidence`；
+- migration 18 `beijing-hospital-directory` 新增医院/院区排序、唯一 `target_id`、`active/support_mode/can_create_watch_task`、41 个新目录 target 与 `source_scope_runtime`。
 
 规则 URL 校验只读取 `hospital_domain`：`officialEntryUrl` 必须命中该医院 `official` kind，`sourceUrl` 必须命中 `evidence` kind。一个医院官方域如同时承担来源证据，需分别登记两个 kind。未登记域 fail closed。
 
@@ -203,9 +206,12 @@ officialEntryUrl + needsReconfirmation
 Adapter manifest 声明：
 
 - `adapterKey`、contract/version；
-- A/B/C access class；
-- transport、允许域、能力和最小间隔；
-- 可产生的事件类型。
+- A/B/C access class 与 `stable/experimental` 稳定性；
+- `sourceId`、跨 binding 共用的 `rateLimitKey`；
+- transport、允许域、最小间隔和可产生事件；
+- 每个精确 `targetId + hospitalId + campusId + departmentId + officialEntryUrl` binding。
+
+`TargetSupportRegistry` 先按 catalog scope 解析 target，再决定是否允许创建任务；`public-source` 调度只接受 manifest binding，`rules-only` 只接受严格规则 payload，`directory-only` 与 inactive target 一律 fail closed。来源页也以 target/binding/sourceId 匹配，不能按 access class 找到第一个 Adapter。
 
 请求只包含公开 scope、日期/条件和 deadline，不含患者身份、Cookie、Token 或验证码。结果通过 Zod 严格解析，错误分类为可解释状态；原始 HTML、请求头、截图、Trace 和浏览器存储不进入 SQLite。
 
@@ -216,7 +222,11 @@ Adapter manifest 声明：
 - 第一次成功检查只建立 baseline。
 - 目标排班首次出现在后续成功结果时产生 `schedule_released`；通知明确排班不代表可预约。
 
-### 7.3 监测空窗
+### 7.3 安贞实验来源
+
+安贞 Adapter 的一个 manifest 绑定朝阳院区冠心病中心与心律失常中心。两个 target 共用 `official-html:anzhen.org.cn` 域级节流，但 baseline 与 `source_scope_runtime` 按 scope 独立；parser 或页面上下文不能覆盖心脏外科、小儿心脏中心、血管外科。WAF、登录墙、结构漂移、越界重定向或不完整周表全部返回诊断状态，不产生 observation。
+
+### 7.4 监测空窗
 
 Worker 在记录本次 attempt **之前**读取上次来源 attempt：
 
@@ -226,11 +236,11 @@ Worker 在记录本次 attempt **之前**读取上次来源 attempt：
 
 这避免短调度抖动误触发 rebaseline，也避免长时间停机/休眠后把离线差异冒充新排班。
 
-### 7.4 Browser Agent
+### 7.5 Browser Agent
 
 Browser Agent 默认关闭。配置后使用固定 loopback challenge/observation 端点、nonce + HMAC-SHA256、Bearer 配对 token、时间窗和 replay 防护。扩展只提交白名单 schema 的脱敏 observation，不提交 Cookie、Token 或任意脚本。
 
-B 级 observation 和实时状态事件仍是实验/P1；它们不改变协和/同仁稳定边界。
+B 级 observation 和实时状态事件仍是实验/P1；它们不改变 catalog support，也不会因新增 11 家目录而扩展 manifest 权限、scope 或 parser。
 
 ## 8. 通知一致性
 
@@ -275,10 +285,10 @@ B 级 observation 和实时状态事件仍是实验/P1；它们不改变协和/�
 - 领域/契约：日期、状态机、URL、Adapter、通知渠道；
 - 磁盘集成：migration、SQLite busy、Job lease、规则 reconciliation、通知 claim、共享锁和 restore；
 - Playwright E2E：真实 Chromium + loopback 应用 + 隔离数据目录；
-- RC：全新 copy、`npm ci`、build、smoke、v16→v17 备份/迁移/恢复；
+- RC：全新 copy、`npm ci`、build、smoke、v17→v18 备份/迁移/恢复，并保留 v14 真实旧 catalog schema 兼容覆盖；
 - live/真实渠道：只由维护者显式低频执行。
 
-普通 CI/E2E 禁止真实医院外联、真实通知和 Browser Agent token。E3 与 7 天 soak 只用于把实时余号/退号升级为稳定声明，不阻塞当前协和排班、同仁规则提醒、存储、安全或 UI 补丁。
+普通 CI/E2E 禁止真实医院外联、真实通知和 Browser Agent token。E3 与 7 天 soak 只用于把实时余号/退号升级为稳定声明，不阻塞当前协和 stable 排班、安贞 experimental 排班、同仁 rules-only、目录、安全或 UI 补丁。
 
 ## 11. 演进与回滚
 

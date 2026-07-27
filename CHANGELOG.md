@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 安全
+
+- 生产依赖审计仅临时豁免 `GHSA-qwww-vcr4-c8h2`：当前仅使用 `react-router-dom` 客户端 SPA API，不存在 RSC/Server Actions 受影响路径；待 `react-router-dom` 兼容 8.3.0+ 后立即移除豁免。
+
+### 目录与来源能力
+
+- catalog 扩展为 11 家医院、12 个院区、45 个科室 target，并为每个 target 返回 `targetId`、`active`、`sortOrder`、`supportMode` 与 `canCreateWatchTask`。
+- 当前真实范围为：协和东单皮肤科 `stable public-source`；安贞朝阳冠心病中心、心律失常中心 `experimental public-source`；同仁崇文门鼻科 `rules-only`。其余新 target 全部 `directory-only`，只提供 HTTPS 医院官网入口，不能创建或恢复任务。
+- 来源与调度改为 manifest binding 驱动，公开来源按精确 `sourceId`、target scope 和稳定性展示；候选页面或 A 级研究结论不会自动变成已支持能力。
+
+### 界面与兼容
+
+- 新建/编辑任务按医院、院区、科室固定级联，并直接消费 catalog target support；移除按 `hospitalId` 推断能力的 UI 分支。
+- 来源页逐 target 展示稳定、实验、规则或仅目录状态；`directory-only` 不再显示“已启用/可监控”。规则页只绑定 scope 精确匹配的持久规则。
+- 新任务只订阅 `schedule_released` 或规则提醒，不承诺实时余号、退号或自动预约；已有实验事件任务编辑时仍保留原值。
+- 修复 migration 14 兼容 fixture、binding-aware PUMCH manifest fixture、安贞目录断言，以及相对 2026-07-27 已过期的 task-edit 日期 fixture。
+
 ## [0.1.1] - 2026-07-20
 
 ### 修复

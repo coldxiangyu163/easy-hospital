@@ -1,4 +1,4 @@
-import type { CheckResult } from '../../core/source-adapter.js';
+import { sourceRateLimitKey, type CheckResult } from '../../core/source-adapter.js';
 import type { SqliteDatabase } from '../../storage/database.js';
 import {
   recordSourceAttempt,
@@ -18,14 +18,14 @@ export function claimPumchLiveProbeCooldown(
   return database.transaction((): PumchLiveProbeCooldownClaim => {
     const retryAfterMs = sourceRetryAfterMs(
       database,
-      pumchDermatologyScheduleManifest.adapterKey,
+      sourceRateLimitKey(pumchDermatologyScheduleManifest),
       now,
     );
     if (retryAfterMs > 0) return { claimed: false, retryAfterMs };
 
     recordSourceAttempt(
       database,
-      pumchDermatologyScheduleManifest.adapterKey,
+      sourceRateLimitKey(pumchDermatologyScheduleManifest),
       now,
       pumchDermatologyScheduleManifest.minIntervalMs,
     );
@@ -40,7 +40,7 @@ export function finishPumchLiveProbeCooldown(
 ): void {
   recordSourceResult(
     database,
-    pumchDermatologyScheduleManifest.adapterKey,
+    sourceRateLimitKey(pumchDermatologyScheduleManifest),
     result,
     attemptedAt + pumchDermatologyScheduleManifest.minIntervalMs,
   );

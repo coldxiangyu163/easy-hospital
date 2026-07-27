@@ -15,11 +15,24 @@ const garbageAdapter: SourceAdapter = {
   manifest: {
     adapterKey: 'pumch-public-dermatology-schedule',
     contractVersion: 1,
-    version: '1.0.0-test',
+    version: '1.1.0-test',
     accessClass: 'A',
     transport: 'fetch',
     allowedHosts: ['www.pumch.cn'],
     minIntervalMs: 300_000,
+    sourceId: 'source-pumch-public-schedule',
+    rateLimitKey: 'official-html:pumch.cn',
+    eventTypes: ['schedule_released'],
+    stability: 'stable',
+    bindings: [
+      {
+        targetId: 'target-pumch-dermatology',
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+        officialEntryUrl: 'https://www.pumch.cn/news_visitinfo.html',
+      },
+    ],
   },
   async check() {
     return { garbage: true, marker: INTERNAL_MARKER } as never;
@@ -100,15 +113,19 @@ describe('5xx 脱敏与 catalog 写入预校验', () => {
     expect(tasks.json().tasks).toHaveLength(0);
   });
 
-  it('watch-task PATCH 合并后非法 catalog 范围返回 400，合法 campusId=null 仍可用', async () => {
+  it('watch-task PATCH 合并后非法 catalog 范围与 enabled campusId=null 均返回 400', async () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-error-'));
-    app = await buildApp({ databasePath: join(directory, 'data.sqlite3') });
+    app = await buildApp({
+      databasePath: join(directory, 'data.sqlite3'),
+      sourceAdapters: [garbageAdapter],
+      workerPollMs: 60_000,
+    });
 
     const created = await app.inject({
       method: 'POST',
       url: '/api/watch-tasks',
       headers: { host: '127.0.0.1' },
-      payload: { ...validTaskPayload, campusId: null },
+      payload: validTaskPayload,
     });
     expect(created.statusCode).toBe(201);
     const task = created.json();
@@ -122,13 +139,14 @@ describe('5xx 脱敏与 catalog 写入预校验', () => {
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json()).toEqual({ error: 'CATALOG_SCOPE_NOT_FOUND' });
 
-    const valid = await app.inject({
+    const missingCampus = await app.inject({
       method: 'PATCH',
       url: `/api/watch-tasks/${task.id}`,
       headers: { host: '127.0.0.1' },
       payload: { version: task.version, campusId: null },
     });
-    expect(valid.statusCode).toBe(200);
+    expect(missingCampus.statusCode).toBe(400);
+    expect(missingCampus.json()).toEqual({ error: 'WATCH_TASK_CAMPUS_REQUIRED' });
   });
 
   it('release-rule 写入前校验 catalog 范围，且先于 UNOFFICIAL_URL 报错', async () => {

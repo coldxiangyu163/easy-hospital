@@ -7,14 +7,34 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createPumchDermatologyScheduleAdapter } from '../../src/adapters/sources/pumch.js';
+import {
+  createPumchDermatologyScheduleAdapter,
+  pumchDermatologyScheduleManifest,
+} from '../../src/adapters/sources/pumch.js';
 import {
   runSourceAdapter,
   type SourceAdapter,
 } from '../../src/core/source-adapter.js';
-import { buildApp } from '../../src/server/app.js';
+import {
+  buildApp as buildBaseApp,
+  type BuildAppOptions,
+} from '../../src/server/app.js';
 import { openDatabase } from '../../src/storage/database.js';
 import { applyCheckResult } from '../../src/storage/monitoring.js';
+
+const pumchAdmissionAdapter: SourceAdapter = {
+  manifest: pumchDermatologyScheduleManifest,
+  async check() {
+    throw new Error('监测 seam 测试不应运行准入 Adapter');
+  },
+};
+
+const buildApp = (options: BuildAppOptions) =>
+  buildBaseApp({
+    ...options,
+    sourceAdapters: [...(options.sourceAdapters ?? []), pumchAdmissionAdapter],
+    browserAgentToken: 'monitoring-browser-agent-admission-token',
+  });
 
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -730,7 +750,7 @@ describe('Observation 到事件的 HTTP /api 纵向切片', () => {
     });
     const result = await runSourceAdapter(adapter, {
       requestId: 'privacy-canary-request',
-      sourceId: 'source-pumch-privacy-canary',
+      sourceId: 'source-pumch-public-schedule',
       hospitalId: 'hospital-pumch',
       campusId: 'campus-pumch-dongdan',
       departmentId: 'department-pumch-dermatology',

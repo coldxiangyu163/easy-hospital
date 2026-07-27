@@ -1,12 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { api, type DetectedEvent, type HealthResponse, type NotificationBatch, type ReleaseRule, type WatchTask } from '../api.js';
-import { accessPolicy } from '../catalog.js';
+import {
+  api,
+  type Catalog,
+  type DetectedEvent,
+  type HealthResponse,
+  type NotificationBatch,
+  type ReleaseRule,
+  type WatchTask,
+} from '../api.js';
+import { resolveCatalogTarget } from '../catalog.js';
 import styles from './pages.module.css';
 
 type NowData = {
   health: HealthResponse;
+  catalog: Catalog;
   tasks: WatchTask[];
   rules: ReleaseRule[];
   events: DetectedEvent[];
@@ -70,14 +79,20 @@ function nextAction(data: NowData): { title: string; description: string; to: st
       action: '查看关注任务',
     };
   }
-  // 只有启用中的 A/B 级任务才存在实时检测；纯 C 级只是按规则提醒，不能说“监控正在运行”
-  const hasMonitoredTask = data.tasks.some(
-    (task) => task.enabled && accessPolicy(task.hospitalId).level !== 'C',
-  );
+  const hasPublicScheduleTask = data.tasks.some((task) => {
+    if (!task.enabled) return false;
+    const target = resolveCatalogTarget(
+      data.catalog,
+      task.hospitalId,
+      task.campusId,
+      task.departmentId,
+    );
+    return target?.department.support.supportMode === 'public-source';
+  });
   return {
     title: '下一步：核对最近规则',
-    description: hasMonitoredTask
-      ? '监控正在运行，目前没有新的变化事件。可以核对放号时间和最后核验日期。'
+    description: hasPublicScheduleTask
+      ? '公开排班关注正在运行，目前没有新的变化事件。可以核对来源状态和最后成功时间。'
       : '规则提醒运行中，目前没有新的变化事件。可以核对放号时间和最后核验日期。',
     to: '/rules',
     action: '查看规则与日历',
@@ -93,16 +108,18 @@ export function NowPage() {
     setState({ status: 'loading' });
     Promise.all([
       api.health(controller.signal),
+      api.catalog(controller.signal),
       api.tasks(controller.signal),
       api.rules(controller.signal),
       api.events(controller.signal),
       api.notifications(controller.signal),
     ]).then(
-      ([health, tasks, rules, events, notifications]) => {
+      ([health, catalog, tasks, rules, events, notifications]) => {
         setState({
           status: 'loaded',
           data: {
             health,
+            catalog,
             tasks: tasks.tasks,
             rules: rules.rules,
             events: events.events,

@@ -2,6 +2,12 @@ import { z } from 'zod';
 
 import { observationSchema, type Observation } from './source-adapter.js';
 
+export type BrowserAgentScopeInput = {
+  hospitalId: string;
+  campusId: string | null;
+  departmentId: string;
+};
+
 type BrowserAgentScope = {
   hospitalId: string;
   campusId: string;
@@ -24,13 +30,18 @@ const BROWSER_AGENT_SCOPES: readonly BrowserAgentScope[] = [
   },
 ] as const;
 
-function findScope(observation: Observation): BrowserAgentScope | undefined {
+function findScope(input: BrowserAgentScopeInput): BrowserAgentScope | undefined {
+  if (input.campusId === null) return undefined;
   return BROWSER_AGENT_SCOPES.find(
     (scope) =>
-      scope.hospitalId === observation.hospitalId &&
-      scope.campusId === observation.campusId &&
-      scope.departmentId === observation.departmentId,
+      scope.hospitalId === input.hospitalId &&
+      scope.campusId === input.campusId &&
+      scope.departmentId === input.departmentId,
   );
+}
+
+export function isBrowserAgentScopeAllowed(input: BrowserAgentScopeInput): boolean {
+  return findScope(input) !== undefined;
 }
 
 function isAllowedOfficialOrigin(value: string, scope: BrowserAgentScope): boolean {

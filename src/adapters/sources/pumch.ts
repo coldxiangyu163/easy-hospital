@@ -56,11 +56,24 @@ const readResponseText = async (response: Response): Promise<string> => {
 export const pumchDermatologyScheduleManifest = {
   adapterKey: 'pumch-public-dermatology-schedule',
   contractVersion: 1,
-  version: '1.0.0',
+  version: '1.1.0',
   accessClass: 'A',
   transport: 'fetch',
   allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
   minIntervalMs: MIN_INTERVAL_MS,
+  sourceId: 'source-pumch-public-schedule',
+  rateLimitKey: 'official-html:pumch.cn',
+  eventTypes: ['schedule_released'],
+  stability: 'stable',
+  bindings: [
+    {
+      targetId: 'target-pumch-dermatology',
+      hospitalId: PUMCH_HOSPITAL_ID,
+      campusId: PUMCH_CAMPUS_ID,
+      departmentId: PUMCH_DEPARTMENT_ID,
+      officialEntryUrl: PUMCH_OFFICIAL_ENTRY_URL,
+    },
+  ],
 } satisfies SourceManifest;
 
 export interface PumchAdapterDependencies {
@@ -154,9 +167,10 @@ export function createPumchDermatologyScheduleAdapter(
     async check(request): Promise<CheckResult> {
       const observedAt = now();
       const supportsScope =
+        request.sourceId === pumchDermatologyScheduleManifest.sourceId &&
         request.hospitalId === PUMCH_HOSPITAL_ID &&
-        request.departmentId === PUMCH_DEPARTMENT_ID &&
-        (request.campusId === null || request.campusId === PUMCH_CAMPUS_ID);
+        request.campusId === PUMCH_CAMPUS_ID &&
+        request.departmentId === PUMCH_DEPARTMENT_ID;
 
       if (!supportsScope) {
         return diagnosticResult('UNSUPPORTED', 'PUMCH_SCOPE_UNSUPPORTED', observedAt);

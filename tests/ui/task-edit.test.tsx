@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
+import { pumchCatalog as catalog, supportedCatalog as catalogWithTongren } from '../support/ui-catalog.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -14,22 +15,6 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { 'content-type': 'application/json' },
   });
 }
-
-const catalog = {
-  hospitals: [
-    {
-      id: 'hospital-pumch',
-      name: '北京协和医院',
-      campuses: [
-        {
-          id: 'campus-pumch-dongdan',
-          name: '东单院区',
-          departments: [{ id: 'department-pumch-dermatology', name: '皮肤科' }],
-        },
-      ],
-    },
-  ],
-};
 
 const originalTask = {
   id: 'task-1',
@@ -39,8 +24,9 @@ const originalTask = {
   matchMode: 'any_expert',
   doctorName: null,
   titles: [],
-  dateFrom: '2026-07-20',
-  dateTo: '2026-07-26',
+  // 当前测试基线为 2026-07-27，任务日期必须留在产品允许的 today..+14d 窗口内。
+  dateFrom: '2026-07-28',
+  dateTo: '2026-08-03',
   session: 'AM',
   eventTypes: ['schedule_released'],
   remindBeforeMinutes: 5,
@@ -48,23 +34,6 @@ const originalTask = {
   version: 1,
   createdAt: '2026-07-19T01:00:00.000Z',
   updatedAt: '2026-07-19T01:00:00.000Z',
-};
-
-const catalogWithTongren = {
-  hospitals: [
-    ...catalog.hospitals,
-    {
-      id: 'hospital-tongren',
-      name: '北京同仁医院',
-      campuses: [
-        {
-          id: 'campus-tongren-chongwenmen',
-          name: '崇文门院区',
-          departments: [{ id: 'department-tongren-rhinology', name: '鼻科' }],
-        },
-      ],
-    },
-  ],
 };
 
 const tongrenTask = {
@@ -121,13 +90,13 @@ describe('编辑关注任务', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '编辑这件关注' })).toBeInTheDocument();
-    expect(screen.getByLabelText('开始日期')).toHaveValue('2026-07-20');
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-28' } });
+    expect(screen.getByLabelText('开始日期')).toHaveValue('2026-07-28');
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-05' } });
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }));
 
-    await waitFor(() => expect(patchBody).toMatchObject({ version: 1, dateTo: '2026-07-28' }));
+    await waitFor(() => expect(patchBody).toMatchObject({ version: 1, dateTo: '2026-08-05' }));
     expect(await screen.findByRole('heading', { name: '北京协和医院 · 东单院区 · 皮肤科' })).toBeInTheDocument();
-    expect(screen.getByText('2026-07-20 至 2026-07-28')).toBeInTheDocument();
+    expect(screen.getByText('2026-07-28 至 2026-08-05')).toBeInTheDocument();
   });
 
   it('编辑 C 级任务：提醒分钟 30 原样保留，不静默改回 5', async () => {
@@ -236,7 +205,7 @@ describe('编辑关注任务', () => {
     );
   });
 
-  it('编辑已勾选实验事件的任务：勾选状态按后端原值初始化，保存不静默覆盖', async () => {
+  it('编辑已有实验事件的任务：不新增实时承诺，保存时仍不静默覆盖', async () => {
     let currentTask = experimentalTask;
     let patchBody: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -262,11 +231,10 @@ describe('编辑关注任务', () => {
     );
 
     await screen.findByRole('heading', { name: '编辑这件关注' });
-    const cancellation = screen.getByLabelText(/实验性 B 级 · 疑似退号回流/);
-    expect(cancellation).toBeChecked();
-    expect(screen.getByLabelText(/实验性 B 级 · 从无号变为有号/)).not.toBeChecked();
+    expect(screen.queryByLabelText(/实验性 B 级/)).not.toBeInTheDocument();
+    expect(screen.getByText(/已有任务中的实验事件会在编辑时原样保留/)).toBeInTheDocument();
 
-    // 不改动事件勾选，直接保存：原 eventTypes 必须原样保留
+    // 不展示新的实时能力开关，直接保存时原 eventTypes 必须原样保留
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }));
     await waitFor(() =>
       expect(patchBody).toMatchObject({
@@ -311,12 +279,12 @@ describe('编辑关注任务', () => {
     );
   });
 
-  it('取消勾选实验事件后保存，只保留 schedule_released', async () => {
+  it('切换到规则 target 时移除旧实验事件，只保留 schedule_released', async () => {
     let currentTask = experimentalTask;
     let patchBody: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname;
-      if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/catalog') return jsonResponse(catalogWithTongren);
       if (path === '/api/runtime-status') return runtimeStatusResponse(true);
       if (path === '/api/watch-tasks/task-1' && init?.method === 'PATCH') {
         patchBody = JSON.parse(String(init.body)) as Record<string, unknown>;
@@ -337,11 +305,7 @@ describe('编辑关注任务', () => {
     );
 
     await screen.findByRole('heading', { name: '编辑这件关注' });
-    const cancellation = screen.getByLabelText(/实验性 B 级 · 疑似退号回流/);
-    expect(cancellation).toBeChecked();
-    fireEvent.click(cancellation);
-    expect(cancellation).not.toBeChecked();
-
+    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-tongren' } });
     fireEvent.click(screen.getByRole('button', { name: '保存更改' }));
     await waitFor(() =>
       expect(patchBody).toMatchObject({
@@ -374,6 +338,6 @@ describe('编辑关注任务', () => {
     const summary = await screen.findByRole('alert');
     expect(summary).toHaveTextContent('任务已在其他页面更新');
     await waitFor(() => expect(summary).toHaveFocus());
-    expect(screen.getByLabelText('开始日期')).toHaveValue('2026-07-20');
+    expect(screen.getByLabelText('开始日期')).toHaveValue('2026-07-28');
   });
 });

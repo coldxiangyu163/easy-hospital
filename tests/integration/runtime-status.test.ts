@@ -18,7 +18,7 @@ describe('GET /api/runtime-status', () => {
     if (directory) await rm(directory, { recursive: true, force: true });
   });
 
-  it('默认装配协和适配器与本机通知状态，且不泄露路径或 secret', async () => {
+  it('默认装配官方公开来源适配器与本机通知状态，且不泄露路径或 secret', async () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-runtime-secret-user-'));
     const barkSecret = 'bark-device-secret-do-not-leak';
     const agentSecret = 'browser-agent-secret-do-not-leak';
@@ -48,6 +48,18 @@ describe('GET /api/runtime-status', () => {
         expect.objectContaining({
           key: 'pumch-public-dermatology-schedule',
           accessClass: 'A',
+          stability: 'stable',
+          eventTypes: ['schedule_released'],
+          runtime: null,
+        }),
+        expect.objectContaining({
+          key: 'anzhen-public-heart-center-schedule',
+          accessClass: 'A',
+          stability: 'experimental',
+          eventTypes: ['schedule_released'],
+          bindings: expect.arrayContaining([
+            expect.objectContaining({ targetId: 'target-anzhen-arrhythmia-center' }),
+          ]),
           runtime: null,
         }),
         expect.objectContaining({
@@ -56,7 +68,11 @@ describe('GET /api/runtime-status', () => {
           capabilities: expect.objectContaining({ schedule: false }),
           runtime: null,
         }),
-        expect.objectContaining({ key: 'tongren-rhinology-rules', accessClass: 'C' }),
+        expect.objectContaining({
+          key: 'rules-only:target-tongren-rhinology',
+          targetId: 'target-tongren-rhinology',
+          accessClass: 'C',
+        }),
       ]),
     });
     const serialized = JSON.stringify(status);
@@ -65,7 +81,7 @@ describe('GET /api/runtime-status', () => {
     expect(serialized).not.toContain(agentSecret);
   });
 
-  it('列出 A/B/C 三类来源及协和适配器最小间隔', async () => {
+  it('列出 A/B/C 三类来源及 manifest 派生能力', async () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-runtime-'));
     running = await startApplicationFromEnvironment({
       RADAR_HOST: '127.0.0.1',
@@ -90,8 +106,26 @@ describe('GET /api/runtime-status', () => {
           },
           runtime: null,
         }),
+        expect.objectContaining({
+          key: 'anzhen-public-heart-center-schedule',
+          accessClass: 'A',
+          enabled: true,
+          minIntervalMs: 43_200_000,
+          stability: 'experimental',
+          capabilities: {
+            schedule: true,
+            availability: false,
+            cancellation: false,
+            ruleReminder: false,
+          },
+          runtime: null,
+        }),
         expect.objectContaining({ key: 'browser-agent', accessClass: 'B' }),
-        expect.objectContaining({ key: 'tongren-rhinology-rules', accessClass: 'C' }),
+        expect.objectContaining({
+          key: 'rules-only:target-tongren-rhinology',
+          targetId: 'target-tongren-rhinology',
+          accessClass: 'C',
+        }),
       ]),
     });
   });
@@ -121,9 +155,37 @@ describe('GET /api/runtime-status', () => {
     const disabled = (await disabledResponse.json()) as {
       adapters: Array<{ key: string }>;
     };
-    expect(disabled.adapters.map(({ key }) => key)).not.toContain(
-      'pumch-public-dermatology-schedule',
+    expect(disabled.adapters.map(({ key }) => key)).not.toEqual(
+      expect.arrayContaining([
+        'pumch-public-dermatology-schedule',
+        'anzhen-public-heart-center-schedule',
+      ]),
     );
+    const rejectedTask = await fetch(`${running.url}/api/watch-tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+        matchMode: 'any_expert',
+        doctorName: null,
+        titles: [],
+        dateFrom: '2026-07-27',
+        dateTo: '2026-08-02',
+        session: 'ANY',
+        eventTypes: ['schedule_released'],
+        remindBeforeMinutes: null,
+      }),
+    });
+    expect(rejectedTask.status).toBe(400);
+    await expect(rejectedTask.json()).resolves.toEqual({
+      error: 'SOURCE_BINDING_NOT_AVAILABLE',
+    });
+    const persistedTasks = (await (
+      await fetch(`${running.url}/api/watch-tasks`)
+    ).json()) as { tasks: unknown[] };
+    expect(persistedTasks.tasks).toEqual([]);
 
     await running.close();
     running = undefined;
@@ -140,8 +202,11 @@ describe('GET /api/runtime-status', () => {
     const enabled = (await enabledResponse.json()) as {
       adapters: Array<{ key: string }>;
     };
-    expect(enabled.adapters.map(({ key }) => key)).toContain(
-      'pumch-public-dermatology-schedule',
+    expect(enabled.adapters.map(({ key }) => key)).toEqual(
+      expect.arrayContaining([
+        'pumch-public-dermatology-schedule',
+        'anzhen-public-heart-center-schedule',
+      ]),
     );
   });
 });

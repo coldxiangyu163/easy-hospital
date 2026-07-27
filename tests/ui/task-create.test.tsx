@@ -7,6 +7,12 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
+import type { Catalog } from '../../src/ui/api.js';
+import {
+  catalogDepartment,
+  pumchDepartment,
+  tongrenDepartment,
+} from '../support/ui-catalog.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -15,7 +21,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-const catalog = {
+const catalog: Catalog = {
   hospitals: [
     {
       id: 'hospital-pumch',
@@ -24,7 +30,7 @@ const catalog = {
         {
           id: 'campus-pumch-dongdan',
           name: '东单院区',
-          departments: [{ id: 'department-pumch-dermatology', name: '皮肤科' }],
+          departments: [pumchDepartment],
         },
       ],
     },
@@ -35,9 +41,135 @@ const catalog = {
         {
           id: 'campus-tongren-chongwenmen',
           name: '崇文门院区',
-          departments: [{ id: 'department-tongren-rhinology', name: '鼻科' }],
+          departments: [tongrenDepartment],
         },
       ],
+    },
+    {
+      id: 'hospital-jishuitan',
+      name: '北京积水潭医院',
+      campuses: [
+        {
+          id: 'campus-jishuitan-xinjiekou',
+          name: '新街口',
+          departments: [
+            catalogDepartment(
+              'department-jishuitan-trauma-orthopedics',
+              '创伤骨科',
+              'target-jishuitan-trauma-orthopedics',
+              'directory-only',
+              false,
+            ),
+          ],
+        },
+        {
+          id: 'campus-jishuitan-huilongguan',
+          name: '回龙观',
+          departments: [
+            catalogDepartment(
+              'department-jishuitan-burn-plastic-wound-repair',
+              '烧伤整形与创面修复科',
+              'target-jishuitan-burn-plastic-wound-repair',
+              'directory-only',
+              false,
+            ),
+          ],
+        },
+      ],
+    },
+    {
+      id: 'hospital-anzhen',
+      name: '北京安贞医院',
+      campuses: [
+        {
+          id: 'campus-anzhen-chaoyang',
+          name: '朝阳院区',
+          departments: [
+            catalogDepartment(
+              'department-anzhen-coronary-heart-disease-center',
+              '冠心病中心',
+              'target-anzhen-coronary-heart-disease-center',
+              'public-source',
+              true,
+            ),
+            catalogDepartment(
+              'department-anzhen-arrhythmia-center',
+              '心律失常中心',
+              'target-anzhen-arrhythmia-center',
+              'public-source',
+              true,
+              20,
+            ),
+            catalogDepartment(
+              'department-anzhen-cardiac-surgery',
+              '心脏外科',
+              'target-anzhen-cardiac-surgery',
+              'directory-only',
+              false,
+              30,
+            ),
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+const runtimeStatus = {
+  dataDirectory: { display: '…/data' },
+  sqlite: { status: 'healthy' },
+  worker: { status: 'healthy', running: true },
+  notifications: [],
+  browserAgent: { configured: false, lastSeenAt: null },
+  sourceCapabilities: [
+    {
+      key: 'pumch-public-dermatology-schedule',
+      sourceId: 'source-pumch-public-schedule',
+      accessClass: 'A',
+      enabled: true,
+      transport: 'fetch',
+      minIntervalMs: 7_200_000,
+      stability: 'stable',
+      eventTypes: ['schedule_released'],
+      bindings: [
+        {
+          targetId: 'target-pumch-dermatology',
+          hospitalId: 'hospital-pumch',
+          campusId: 'campus-pumch-dongdan',
+          departmentId: 'department-pumch-dermatology',
+          officialEntryUrl: 'https://www.pumch.cn/news_visitinfo.html',
+        },
+      ],
+      capabilities: { schedule: true, availability: false, cancellation: false, ruleReminder: false },
+      runtime: null,
+    },
+    {
+      key: 'anzhen-public-heart-center-schedule',
+      sourceId: 'source-anzhen-public-heart-center-schedule',
+      accessClass: 'A',
+      enabled: true,
+      transport: 'fetch',
+      minIntervalMs: 43_200_000,
+      stability: 'experimental',
+      eventTypes: ['schedule_released'],
+      bindings: [
+        {
+          targetId: 'target-anzhen-coronary-heart-disease-center',
+          hospitalId: 'hospital-anzhen',
+          campusId: 'campus-anzhen-chaoyang',
+          departmentId: 'department-anzhen-coronary-heart-disease-center',
+          officialEntryUrl: 'https://www.anzhen.org.cn/Html/Departments/Main/SearchIndex_118.html',
+        },
+        {
+          targetId: 'target-anzhen-arrhythmia-center',
+          hospitalId: 'hospital-anzhen',
+          campusId: 'campus-anzhen-chaoyang',
+          departmentId: 'department-anzhen-arrhythmia-center',
+          officialEntryUrl: 'https://www.anzhen.org.cn/Html/Departments/Main/SearchIndex_118.html',
+        },
+      ],
+      capabilities: { schedule: true, availability: false, cancellation: false, ruleReminder: false },
+      runtime: null,
     },
   ],
 };
@@ -50,23 +182,21 @@ afterEach(() => {
 describe('创建关注任务', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-07-19T01:00:00.000Z'));
+    vi.setSystemTime(new Date('2026-07-27T01:00:00.000Z'));
   });
 
-  it('先校验真实 catalog 表单，再通过 API 创建并进入任务详情', async () => {
+  it('按 catalog support 创建协和公开排班任务，不新增实时余号或退号事件', async () => {
     let createdTask: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return jsonResponse(runtimeStatus);
       if (path === '/api/watch-tasks' && init?.method === 'POST') {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         createdTask = {
           ...body,
-          id: 'task-1',
-          enabled: true,
-          version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z',
-          updatedAt: '2026-07-19T01:00:00.000Z',
+          id: 'task-1', enabled: true, version: 1,
+          createdAt: '2026-07-27T01:00:00.000Z', updatedAt: '2026-07-27T01:00:00.000Z',
         };
         return jsonResponse(createdTask, 201);
       }
@@ -83,11 +213,11 @@ describe('创建关注任务', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText('正在读取可关注范围')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: '新增一件关注' })).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
+    expect(screen.getByText('稳定公开排班来源')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/实验性 B 级/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
     fireEvent.change(screen.getByLabelText('时段'), { target: { value: 'AM' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
 
@@ -96,39 +226,31 @@ describe('创建关注任务', () => {
         hospitalId: 'hospital-pumch',
         campusId: 'campus-pumch-dongdan',
         departmentId: 'department-pumch-dermatology',
-        matchMode: 'any_expert',
-        doctorName: null,
-        titles: [],
-        dateFrom: '2026-07-20',
-        dateTo: '2026-07-26',
+        dateFrom: '2026-07-28',
+        dateTo: '2026-08-03',
         session: 'AM',
         eventTypes: ['schedule_released'],
         remindBeforeMinutes: null,
       }),
     );
-    expect(
-      await screen.findByRole('heading', {
-        name: '北京协和医院 · 东单院区 · 皮肤科',
-      }),
-    ).toBeInTheDocument();
-    expect(screen.getByText('所有预约仍需在官方渠道手动完成')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '北京协和医院 · 东单院区 · 皮肤科' })).toBeInTheDocument();
   });
 
-  it('C 级规则提醒隐藏并强制忽略医生、职称与时段条件', async () => {
+  it('同仁 rules-only 由 target support 驱动，隐藏并规范化医生、职称与时段', async () => {
     let createdTask: Record<string, unknown> | undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return jsonResponse(runtimeStatus);
       if (path === '/api/watch-tasks' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         createdTask = {
-          ...body,
-          id: 'task-c-1', enabled: true, version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
+          ...(JSON.parse(String(init.body)) as Record<string, unknown>),
+          id: 'task-rules', enabled: true, version: 1,
+          createdAt: '2026-07-27T01:00:00.000Z', updatedAt: '2026-07-27T01:00:00.000Z',
         };
         return jsonResponse(createdTask, 201);
       }
-      if (path === '/api/watch-tasks/task-c-1') return jsonResponse(createdTask);
+      if (path === '/api/watch-tasks/task-rules') return jsonResponse(createdTask);
       if (path === '/api/events') return jsonResponse({ events: [] });
       if (path === '/api/release-rules') return jsonResponse({ rules: [] });
       throw new Error(`unexpected request ${path}`);
@@ -145,10 +267,10 @@ describe('创建关注任务', () => {
     fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-tongren' } });
     expect(screen.queryByLabelText('关注范围')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('时段')).not.toBeInTheDocument();
-    expect(screen.getByText('医生、职称与时段不会参与判断。', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('规则提醒')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
 
     await waitFor(() => expect(createdTask).toMatchObject({
@@ -157,271 +279,16 @@ describe('创建关注任务', () => {
       doctorName: null,
       titles: [],
       session: 'ANY',
+      eventTypes: ['schedule_released'],
+      remindBeforeMinutes: 5,
     }));
-    expect(await screen.findByText('医生、职称和时段不参与规则提醒')).toBeInTheDocument();
   });
 
-  it('Browser Agent 已配置时展示实验事件勾选，默认不选，勾选后随任务提交', async () => {
-    let createdTask: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), 'http://localhost').pathname;
-      if (path === '/api/catalog') return jsonResponse(catalog);
-      if (path === '/api/runtime-status') {
-        return jsonResponse({
-          dataDirectory: { display: '…/data' },
-          sqlite: { status: 'healthy' },
-          worker: { status: 'healthy', running: true },
-          notifications: [],
-          browserAgent: { configured: true, lastSeenAt: null },
-          sourceCapabilities: [],
-        });
-      }
-      if (path === '/api/watch-tasks' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        createdTask = {
-          ...body,
-          id: 'task-b-1', enabled: true, version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
-        };
-        return jsonResponse(createdTask, 201);
-      }
-      if (path === '/api/watch-tasks/task-b-1') return jsonResponse(createdTask);
-      if (path === '/api/events') return jsonResponse({ events: [] });
-      if (path === '/api/release-rules') return jsonResponse({ rules: [] });
-      throw new Error(`unexpected request ${path}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(
-      <MemoryRouter initialEntries={['/tasks/new']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    await screen.findByRole('heading', { name: '新增一件关注' });
-    const fixed = screen.getByLabelText('新排班发布（始终包含）');
-    expect(fixed).toBeChecked();
-    expect(fixed).toBeDisabled();
-    const available = screen.getByLabelText(/实验性 B 级 · 从无号变为有号/);
-    const cancellation = screen.getByLabelText(/实验性 B 级 · 疑似退号回流/);
-    expect(available).not.toBeChecked();
-    expect(cancellation).not.toBeChecked();
-
-    fireEvent.click(cancellation);
-    expect(cancellation).toBeChecked();
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
-
-    await waitFor(() =>
-      expect(createdTask).toMatchObject({
-        eventTypes: ['schedule_released', 'cancellation_slot_detected'],
-      }),
-    );
-  });
-
-  it('Browser Agent 未配置时不展示实验勾选，创建只订阅新排班发布', async () => {
-    let createdTask: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), 'http://localhost').pathname;
-      if (path === '/api/catalog') return jsonResponse(catalog);
-      if (path === '/api/runtime-status') {
-        return jsonResponse({
-          dataDirectory: { display: '…/data' },
-          sqlite: { status: 'healthy' },
-          worker: { status: 'healthy', running: true },
-          notifications: [],
-          browserAgent: { configured: false, lastSeenAt: null },
-          sourceCapabilities: [],
-        });
-      }
-      if (path === '/api/watch-tasks' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        createdTask = {
-          ...body,
-          id: 'task-a-2', enabled: true, version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
-        };
-        return jsonResponse(createdTask, 201);
-      }
-      if (path === '/api/watch-tasks/task-a-2') return jsonResponse(createdTask);
-      if (path === '/api/events') return jsonResponse({ events: [] });
-      if (path === '/api/release-rules') return jsonResponse({ rules: [] });
-      throw new Error(`unexpected request ${path}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(
-      <MemoryRouter initialEntries={['/tasks/new']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    await screen.findByRole('heading', { name: '新增一件关注' });
-    expect(screen.getByLabelText('新排班发布（始终包含）')).toBeChecked();
-    expect(screen.queryByLabelText(/实验性 B 级/)).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
-
-    await waitFor(() =>
-      expect(createdTask).toMatchObject({
-        hospitalId: 'hospital-pumch',
-        eventTypes: ['schedule_released'],
-      }),
-    );
-  });
-
-  it('C 级规则提醒在 Browser Agent 已配置时仍不展示实验勾选，只依赖 schedule_released', async () => {
-    let createdTask: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), 'http://localhost').pathname;
-      if (path === '/api/catalog') return jsonResponse(catalog);
-      if (path === '/api/runtime-status') {
-        return jsonResponse({
-          dataDirectory: { display: '…/data' },
-          sqlite: { status: 'healthy' },
-          worker: { status: 'healthy', running: true },
-          notifications: [],
-          browserAgent: { configured: true, lastSeenAt: null },
-          sourceCapabilities: [],
-        });
-      }
-      if (path === '/api/watch-tasks' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        createdTask = {
-          ...body,
-          id: 'task-c-2', enabled: true, version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
-        };
-        return jsonResponse(createdTask, 201);
-      }
-      if (path === '/api/watch-tasks/task-c-2') return jsonResponse(createdTask);
-      if (path === '/api/events') return jsonResponse({ events: [] });
-      if (path === '/api/release-rules') return jsonResponse({ rules: [] });
-      throw new Error(`unexpected request ${path}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(
-      <MemoryRouter initialEntries={['/tasks/new']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    await screen.findByRole('heading', { name: '新增一件关注' });
-    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-tongren' } });
-    expect(screen.queryByLabelText(/实验性 B 级/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('新排班发布（始终包含）')).not.toBeInTheDocument();
-    expect(screen.getByText('医生、职称与时段不会参与判断。', { exact: false })).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
-
-    await waitFor(() =>
-      expect(createdTask).toMatchObject({
-        hospitalId: 'hospital-tongren',
-        matchMode: 'any_expert',
-        session: 'ANY',
-        eventTypes: ['schedule_released'],
-        remindBeforeMinutes: 5,
-      }),
-    );
-  });
-
-  it('新建默认 A 级提醒分钟为 null，主动切换医院时按新等级重置', async () => {
-    let createdTask: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), 'http://localhost').pathname;
-      if (path === '/api/catalog') return jsonResponse(catalog);
-      if (path === '/api/watch-tasks' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        createdTask = {
-          ...body,
-          id: 'task-sw-1', enabled: true, version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
-        };
-        return jsonResponse(createdTask, 201);
-      }
-      if (path === '/api/watch-tasks/task-sw-1') return jsonResponse(createdTask);
-      if (path === '/api/events') return jsonResponse({ events: [] });
-      if (path === '/api/release-rules') return jsonResponse({ rules: [] });
-      throw new Error(`unexpected request ${path}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(
-      <MemoryRouter initialEntries={['/tasks/new']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    await screen.findByRole('heading', { name: '新增一件关注' });
-    // 协和(A) → 同仁(C) → 协和(A)：主动切换按新 policy 重置，最终回到 A 级应为 null
-    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-tongren' } });
-    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-pumch' } });
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
-
-    await waitFor(() =>
-      expect(createdTask).toMatchObject({
-        hospitalId: 'hospital-pumch',
-        remindBeforeMinutes: null,
-      }),
-    );
-  });
-
-  it('新建切到 C 级后提交，规则提醒分钟默认 5', async () => {
-    let createdTask: Record<string, unknown> | undefined;
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), 'http://localhost').pathname;
-      if (path === '/api/catalog') return jsonResponse(catalog);
-      if (path === '/api/watch-tasks' && init?.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        createdTask = {
-          ...body,
-          id: 'task-sw-2', enabled: true, version: 1,
-          createdAt: '2026-07-19T01:00:00.000Z', updatedAt: '2026-07-19T01:00:00.000Z',
-        };
-        return jsonResponse(createdTask, 201);
-      }
-      if (path === '/api/watch-tasks/task-sw-2') return jsonResponse(createdTask);
-      if (path === '/api/events') return jsonResponse({ events: [] });
-      if (path === '/api/release-rules') return jsonResponse({ rules: [] });
-      throw new Error(`unexpected request ${path}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(
-      <MemoryRouter initialEntries={['/tasks/new']}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    await screen.findByRole('heading', { name: '新增一件关注' });
-    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-tongren' } });
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-07-26' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
-
-    await waitFor(() =>
-      expect(createdTask).toMatchObject({
-        hospitalId: 'hospital-tongren',
-        remindBeforeMinutes: 5,
-      }),
-    );
-  });
-
-  it('在客户端阻止缺少日期和超过 14 天的提交', async () => {
+  it('医院到院区到科室固定级联，directory-only 可打开 HTTPS 官网但不能提交', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return jsonResponse(runtimeStatus);
       throw new Error(`unexpected request ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -433,24 +300,75 @@ describe('创建关注任务', () => {
     );
 
     await screen.findByRole('heading', { name: '新增一件关注' });
-    expect(screen.getByLabelText('开始日期')).toHaveAttribute('min', '2026-07-19');
-    expect(screen.getByLabelText('开始日期')).toHaveAttribute('max', '2026-08-02');
-    expect(screen.getByLabelText('结束日期')).toHaveAttribute('max', '2026-08-02');
+    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-jishuitan' } });
+    expect(screen.getByLabelText('院区')).toHaveValue('campus-jishuitan-xinjiekou');
+    expect(screen.getByLabelText('科室')).toHaveValue('department-jishuitan-trauma-orthopedics');
+    fireEvent.change(screen.getByLabelText('院区'), { target: { value: 'campus-jishuitan-huilongguan' } });
+    expect(screen.getByLabelText('科室')).toHaveValue('department-jishuitan-burn-plastic-wound-repair');
+    expect(screen.getByText('仅目录，待可靠公开来源')).toBeInTheDocument();
+    expect(screen.queryByLabelText('开始日期')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: '打开北京积水潭医院官网（新标签页打开）' }))
+      .toHaveAttribute('href', 'https://www.jst-hosp.com.cn/');
+  });
+
+  it('安贞只在两个 manifest target 展示 experimental public-source，其他科室仍 fail closed', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return jsonResponse(runtimeStatus);
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/new']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: '新增一件关注' });
+    fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-anzhen' } });
+    expect(screen.getByLabelText('科室')).toHaveValue('department-anzhen-coronary-heart-disease-center');
+    expect(screen.getByText('实验性公开排班来源')).toBeInTheDocument();
+    expect(screen.getByText('source-anzhen-public-heart-center-schedule')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('科室'), { target: { value: 'department-anzhen-arrhythmia-center' } });
+    expect(screen.getByText('实验性公开排班来源')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText('科室'), { target: { value: 'department-anzhen-cardiac-surgery' } });
+    expect(screen.getByText('仅目录，待可靠公开来源')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
+  });
+
+  it('在客户端阻止缺少日期和超过 14 天的提交，不放宽产品日期校验', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return jsonResponse(runtimeStatus);
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/new']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: '新增一件关注' });
+    expect(screen.getByLabelText('开始日期')).toHaveAttribute('min', '2026-07-27');
+    expect(screen.getByLabelText('开始日期')).toHaveAttribute('max', '2026-08-10');
     fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
     expect(screen.getByText('请选择开始日期。')).toBeInTheDocument();
     expect(screen.getByText('请选择结束日期。')).toBeInTheDocument();
-    expect(screen.getByLabelText('开始日期')).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByLabelText('结束日期')).toHaveAttribute('aria-invalid', 'true');
 
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-20' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-05' } });
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-11' } });
     fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
     expect(screen.getByText('日期范围最多为连续 14 天。')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-29' } });
-    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-03' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建并开始关注' }));
-    expect(screen.getByText('最多可选择北京时间今天起 14 天内的日期。')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some((call) => call[1]?.method === 'POST')).toBe(false);
   });
 });

@@ -34,7 +34,7 @@ jobs:
         run: npm run check:release
       - name: Audit production dependencies
         # registry 不支持 audit 端点时 npm 以非零退出码报错，属于清晰失败而非静默跳过。
-        run: npm audit --omit=dev
+        run: npm run audit:production
       - name: Lint
         run: npm run lint
       - name: Type-check

@@ -125,6 +125,28 @@ describe('Browser Agent 服务端 payload 契约', () => {
     expect(browserAgentIngestSchema.safeParse(mixed).success).toBe(false);
   });
 
+  it('新增 directory-only 目录 scope 仍被 Browser Agent 契约拒绝', () => {
+    const directoryOnlyScope = {
+      ...validPayload,
+      sourceId: 'browser-agent-hospital-pkuph',
+      observations: [
+        {
+          ...validPayload.observations[0],
+          slotKey:
+            'browser-agent:hospital-pkuph:campus-pkuph-xizhimen:department-pkuph-hematology:2026-07-20:AM:*:*',
+          hospitalId: 'hospital-pkuph',
+          campusId: 'campus-pkuph-xizhimen',
+          departmentId: 'department-pkuph-hematology',
+          doctorName: null,
+          title: null,
+          officialEntryUrl: 'https://www.pkuph.cn/',
+        },
+      ],
+    };
+
+    expect(browserAgentIngestSchema.safeParse(directoryOnlyScope).success).toBe(false);
+  });
+
   it('只允许两个首批目标的完整 scope', () => {
     const wrongScope = {
       ...validPayload,

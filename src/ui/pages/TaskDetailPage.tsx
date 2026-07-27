@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { api, type Catalog, type DetectedEvent, type ReleaseRule, type WatchTask } from '../api.js';
-import { accessPolicy, targetLabel } from '../catalog.js';
+import {
+  officialHospitalUrl,
+  resolveCatalogTarget,
+  supportPresentation,
+  targetLabel,
+} from '../catalog.js';
 import styles from './pages.module.css';
 
 type DetailState =
@@ -90,9 +95,18 @@ export function TaskDetailPage() {
     );
   }
 
-  const policy = accessPolicy(state.task.hospitalId);
-  const ruleOnly = policy.level === 'C';
-  const officialUrl = state.event?.payload.officialEntryUrl ?? state.rule?.officialEntryUrl;
+  const target = resolveCatalogTarget(
+    state.catalog,
+    state.task.hospitalId,
+    state.task.campusId,
+    state.task.departmentId,
+  );
+  const policy = supportPresentation(target?.department.support);
+  const ruleOnly = policy.ruleOnly;
+  const officialUrl =
+    state.event?.payload.officialEntryUrl ??
+    state.rule?.officialEntryUrl ??
+    (target ? officialHospitalUrl(target.hospital) : undefined);
   return (
     <>
       <header className={styles.pageHeader}>
@@ -100,13 +114,13 @@ export function TaskDetailPage() {
         <h1 className={styles.pageTitle}>
           {targetLabel(state.catalog, state.task.hospitalId, state.task.campusId, state.task.departmentId)}
         </h1>
-        <p className={styles.pageLead}>{state.task.enabled ? (ruleOnly ? '规则提醒已启用' : '监控中') : '已暂停'} · {policy.title}</p>
+        <p className={styles.pageLead}>{state.task.enabled ? policy.activityLabel : '已暂停'} · {policy.title}</p>
       </header>
 
       <section className={styles.detailSurface}>
         <div className={styles.detailStatus}>
           <span className={state.task.enabled ? styles.statusGood : styles.statusMuted}>
-            {state.task.enabled ? (ruleOnly ? '规则提醒已启用' : '监控中') : '已暂停'}
+            {state.task.enabled ? policy.activityLabel : '已暂停'}
           </span>
           <h2>{state.event ? eventLabel(state.event) : (ruleOnly ? '等待下一次规则提醒' : '当前没有检测事件')}</h2>
           {state.event ? (

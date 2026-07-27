@@ -5,7 +5,13 @@ import {
   type NotificationChannel,
   type NotificationMessage,
 } from '../core/notification-channel.js';
-import { runSourceAdapter, type SourceAdapter } from '../core/source-adapter.js';
+import {
+  findSourceBinding,
+  isBoundSourceManifest,
+  runSourceAdapter,
+  sourceRateLimitKey,
+  type SourceAdapter,
+} from '../core/source-adapter.js';
 import type { SqliteDatabase } from '../storage/database.js';
 import { SqliteJobRunner, type PersistentJob } from '../storage/job-runner.js';
 import { applyCheckResult, deleteMonitoringBaseline } from '../storage/monitoring.js';
@@ -30,12 +36,13 @@ import {
   scheduleWatchTask,
 } from '../storage/scheduling.js';
 import {
-  getSourceRuntime,
   recordSourceAttempt,
   recordSourceFailure,
   recordSourceResult,
+  recordSourceScopeAttempt,
   sourceMinimumIntervalMs,
   sourceRetryAfterMs,
+  sourceScopeNeedsRebaseline,
 } from '../storage/source-runtime.js';
 import { getWatchTask, listWatchTasks } from '../storage/watch-tasks.js';
 
@@ -209,23 +216,42 @@ export class LocalWorker {
     const adapter = payload.adapterKey
       ? this.sourceAdapters.get(payload.adapterKey)
       : undefined;
+    const binding = adapter
+      ? findSourceBinding(adapter.manifest, {
+          hospitalId: payload.hospitalId ?? '',
+          campusId: payload.campusId ?? null,
+          departmentId: payload.departmentId ?? '',
+        })
+      : undefined;
     if (
       !adapter ||
-      !payload.sourceId ||
+      !isBoundSourceManifest(adapter.manifest) ||
+      !binding ||
+      payload.sourceId !== adapter.manifest.sourceId ||
       !payload.scopeKey ||
-      !payload.hospitalId ||
-      !payload.departmentId ||
       payload.scopeKey !==
         createSourceScopeKey({
-          adapterKey: payload.adapterKey!,
-          hospitalId: payload.hospitalId,
-          campusId: payload.campusId ?? null,
-          departmentId: payload.departmentId,
+          adapterKey: adapter.manifest.adapterKey,
+          hospitalId: binding.hospitalId,
+          campusId: binding.campusId,
+          departmentId: binding.departmentId,
         })
     ) {
       this.runner.complete(job.id, now);
       return;
     }
+
+    const sourcePayload: SourceCheckJobPayload = {
+      adapterKey: adapter.manifest.adapterKey,
+      sourceId: adapter.manifest.sourceId,
+      scopeKey: payload.scopeKey,
+      hospitalId: binding.hospitalId,
+      campusId: binding.campusId,
+      departmentId: binding.departmentId,
+      minIntervalMs:
+        sourceMinimumIntervalMs(adapter.manifest.minIntervalMs) *
+        adapter.manifest.bindings.length,
+    };
 
     const beijingNow = new Date(now + 8 * 60 * 60 * 1_000);
     const today = [
@@ -236,9 +262,9 @@ export class LocalWorker {
     const tasks = listWatchTasks(this.database).filter(
       (task) =>
         task.enabled &&
-        task.hospitalId === payload.hospitalId &&
-        task.campusId === (payload.campusId ?? null) &&
-        task.departmentId === payload.departmentId &&
+        task.hospitalId === sourcePayload.hospitalId &&
+        task.campusId === sourcePayload.campusId &&
+        task.departmentId === sourcePayload.departmentId &&
         task.dateTo >= today,
     );
     if (tasks.length === 0) {
@@ -254,44 +280,45 @@ export class LocalWorker {
       (latest, task) => (task.dateTo > latest ? task.dateTo : latest),
       tasks[0]!.dateTo,
     );
-    const minIntervalMs = sourceMinimumIntervalMs(
-      adapter.manifest.adapterKey,
-      adapter.manifest.minIntervalMs,
-    );
-    const retryAfterMs = sourceRetryAfterMs(this.database, adapter.manifest.adapterKey, now);
+    const scopeIntervalMs = sourcePayload.minIntervalMs;
+    const domainIntervalMs = sourceMinimumIntervalMs(adapter.manifest.minIntervalMs);
+    const rateLimitKey = sourceRateLimitKey(adapter.manifest);
+    const retryAfterMs = sourceRetryAfterMs(this.database, rateLimitKey, now);
     if (retryAfterMs > 0) {
       this.runner.complete(job.id, now);
-      this.enqueueNextSourceCheck(payload as SourceCheckJobPayload, now + retryAfterMs);
+      this.enqueueNextSourceCheck(sourcePayload, now + retryAfterMs);
       return;
     }
 
-    // 长时间离线后先建新基线（README 承诺）：必须在记录本次 attempt 之前读取
-    // source_runtime，否则 lastAttemptAt 会被本次 attempt 刷新。距上次 attempt
-    // 超过 2× 有效最小轮询间隔即判定为监测空窗：删除该 scope 的基线行（保留
-    // schedule/availability 审计状态），本轮只静默重建基线、不产生事件。
-    // 正常轮询的 attempt 间距 ≈ 1× 间隔，不会误判。
-    const lastAttemptAt =
-      getSourceRuntime(this.database, adapter.manifest.adapterKey)?.lastAttemptAt ?? null;
-    const rebaseline = lastAttemptAt !== null && now - lastAttemptAt > minIntervalMs * 2;
+    // rateLimitKey 只负责同域低频节流；空窗判断必须按 target scope 独立记录，
+    // 否则同一 adapter 的另一个 binding 会刷新 adapter-wide lastAttemptAt，导致
+    // 本 scope 错过 rebaseline。
+    const rebaseline = sourceScopeNeedsRebaseline(
+      this.database,
+      sourcePayload.scopeKey,
+      now,
+      scopeIntervalMs,
+    );
     if (rebaseline) {
-      deleteMonitoringBaseline(this.database, payload.sourceId, payload.scopeKey);
+      deleteMonitoringBaseline(this.database, sourcePayload.sourceId, sourcePayload.scopeKey);
       this.lastRebaselineAt = now;
     }
 
-    recordSourceAttempt(
-      this.database,
-      adapter.manifest.adapterKey,
+    recordSourceAttempt(this.database, rateLimitKey, now, domainIntervalMs);
+    recordSourceScopeAttempt(this.database, {
+      scopeKey: sourcePayload.scopeKey,
+      adapterKey: adapter.manifest.adapterKey,
+      sourceId: adapter.manifest.sourceId,
       now,
-      minIntervalMs,
-    );
+    });
 
     try {
       const request = {
         requestId: randomUUID(),
-        sourceId: payload.sourceId,
-        hospitalId: payload.hospitalId,
-        campusId: payload.campusId ?? null,
-        departmentId: payload.departmentId,
+        sourceId: sourcePayload.sourceId,
+        hospitalId: sourcePayload.hospitalId,
+        campusId: sourcePayload.campusId,
+        departmentId: sourcePayload.departmentId,
         dateFrom,
         dateTo,
         doctorName: null,
@@ -300,16 +327,17 @@ export class LocalWorker {
         deadlineAt: new Date(now + 30_000).toISOString(),
       };
       const result = await runSourceAdapter(adapter, request);
-      const minNextAllowedAt = now + minIntervalMs;
+      const minRateAllowedAt = now + domainIntervalMs;
+      const nextScopeAt = now + scopeIntervalMs;
       recordSourceResult(
         this.database,
-        adapter.manifest.adapterKey,
+        rateLimitKey,
         result,
-        minNextAllowedAt,
+        minRateAllowedAt,
       );
       applyCheckResult(this.database, {
         sourceId: request.sourceId,
-        scopeKey: payload.scopeKey,
+        scopeKey: sourcePayload.scopeKey,
         requestId: request.requestId,
         result,
         rebaseline,
@@ -318,29 +346,26 @@ export class LocalWorker {
 
       const resultNextAllowedAt = result.nextAllowedAt
         ? Date.parse(result.nextAllowedAt)
-        : minNextAllowedAt;
+        : minRateAllowedAt;
       this.enqueueNextSourceCheck(
-        payload as SourceCheckJobPayload,
-        Math.max(minNextAllowedAt, resultNextAllowedAt),
+        sourcePayload,
+        Math.max(nextScopeAt, resultNextAllowedAt),
       );
     } catch {
       const failedAt = this.now();
       recordSourceFailure(
         this.database,
-        adapter.manifest.adapterKey,
+        rateLimitKey,
         'SOURCE_CHECK_FAILED',
-        failedAt + minIntervalMs,
+        failedAt + domainIntervalMs,
       );
       this.runner.fail(job.id, {
         now: failedAt,
         errorCode: 'SOURCE_CHECK_FAILED',
-        retryAt: failedAt + minIntervalMs,
+        retryAt: failedAt + scopeIntervalMs,
       });
       if (job.attempts >= job.maxAttempts) {
-        this.enqueueNextSourceCheck(
-          payload as SourceCheckJobPayload,
-          failedAt + minIntervalMs,
-        );
+        this.enqueueNextSourceCheck(sourcePayload, failedAt + scopeIntervalMs);
       }
     }
   }

@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
+import { supportedCatalog as catalog } from '../support/ui-catalog.js';
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -15,32 +16,16 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-const catalog = {
-  hospitals: [
-    {
-      id: 'hospital-pumch',
-      name: '北京协和医院',
-      campuses: [
-        {
-          id: 'campus-pumch-dongdan',
-          name: '东单院区',
-          departments: [{ id: 'department-pumch-dermatology', name: '皮肤科' }],
-        },
-      ],
-    },
-  ],
-};
-
 const rule = {
   id: 'rule-1',
-  hospitalId: 'hospital-pumch',
-  campusId: 'campus-pumch-dongdan',
-  departmentId: 'department-pumch-dermatology',
+  hospitalId: 'hospital-tongren',
+  campusId: 'campus-tongren-chongwenmen',
+  departmentId: 'department-tongren-rhinology',
   advanceDays: 7,
   releaseTimeLocal: '07:00',
   sameDayPolicy: '当日剩余号以官方页面为准',
-  officialEntryUrl: 'https://www.pumch.cn/register',
-  sourceUrl: 'https://www.pumch.cn/notice',
+  officialEntryUrl: 'https://www.bjtrhos.cn/Html/News/Articles/7104.html',
+  sourceUrl: 'https://news.bjd.com.cn/2024/07/02/10822953.shtml',
   verifiedAt: '2026-07-18T09:20:00.000Z',
   confidence: 'high',
   enabled: true,
@@ -70,7 +55,7 @@ describe('规则与日历', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '什么时候值得看' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '北京协和医院 · 东单院区 · 皮肤科' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '北京同仁医院 · 崇文门院区 · 鼻科' })).toBeInTheDocument();
     expect(screen.getByText('07:00')).toBeInTheDocument();
     expect(screen.getByText('提前 7 天')).toBeInTheDocument();
     expect(screen.getByText('按规则推算，需在官方渠道确认')).toBeInTheDocument();

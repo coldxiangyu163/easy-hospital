@@ -6,6 +6,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../../src/server/app.js';
+import { openDatabase } from '../../src/storage/database.js';
+import { hasOfficialRuleUrls } from '../../src/storage/release-rules.js';
 
 describe('ReleaseRule PATCH 官方 URL 边界', () => {
   let app: FastifyInstance | undefined;
@@ -99,6 +101,44 @@ describe('ReleaseRule PATCH 官方 URL 边界', () => {
       },
     });
     expect(created.statusCode).toBe(201);
+  });
+
+  it('新增医院官方域逐院登记，严格拒绝跨院和 lookalike', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      const cases = [
+        ['hospital-pkuph', 'https://www.pkuph.cn/', 'https://pkuph.cn/news'],
+        ['hospital-puh3', 'https://www.puh3.net.cn/', 'https://www.puh3.net.cn/news'],
+        ['hospital-jishuitan', 'https://www.jst-hosp.com.cn/', 'https://jst-hosp.com.cn/news'],
+        ['hospital-fuwai', 'https://www.fuwaihospital.org/', 'https://www.fuwai.com/news'],
+        ['hospital-anzhen', 'https://www.anzhen.org/', 'https://anzhen.org/news'],
+        ['hospital-pkufh', 'https://www.pkufh.com/', 'https://pkufh.91health.net/news'],
+        ['hospital-tiantan', 'https://www.bjtth.org/', 'https://bjtth.org/news'],
+        ['hospital-beijing-childrens', 'https://www.bch.com.cn/', 'https://bch.com.cn/news'],
+        ['hospital-cicams', 'https://www.cicams.ac.cn/', 'https://cicams.ac.cn/news'],
+      ] as const;
+      for (const [hospitalId, officialEntryUrl, sourceUrl] of cases) {
+        expect(
+          hasOfficialRuleUrls(database, { hospitalId, officialEntryUrl, sourceUrl }),
+        ).toBe(true);
+        expect(
+          hasOfficialRuleUrls(database, {
+            hospitalId,
+            officialEntryUrl: `${officialEntryUrl.slice(0, -1)}.evil.example/`,
+            sourceUrl,
+          }),
+        ).toBe(false);
+      }
+      expect(
+        hasOfficialRuleUrls(database, {
+          hospitalId: 'hospital-pkuph',
+          officialEntryUrl: 'https://www.puh3.net.cn/',
+          sourceUrl: 'https://www.pkuph.cn/news',
+        }),
+      ).toBe(false);
+    } finally {
+      database.close();
+    }
   });
 
   it('同仁 lookalike 域与证据域越位仍被拒绝', async () => {

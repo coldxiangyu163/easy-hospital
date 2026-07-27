@@ -13,12 +13,14 @@
 
 北京挂号雷达帮助用户查看北京目标医院的官方放号规则，在本机低频检查受支持的官方公开排班，并通过本机配置的渠道提醒用户。用户收到提醒后必须前往官方渠道，自行完成登录、验证码、实名、医保、确认和付款。
 
-稳定产品不是自动抢号器，也不是实时号源库存系统。当前稳定承诺只有：
+稳定产品不是自动抢号器，也不是实时号源库存系统。截至 2026-07-27，产品提供 11 家医院目录，但真实任务能力严格限于：
 
-1. 北京协和医院东单院区皮肤科公开页面的**新排班发布**（`schedule_released`）；
-2. 北京同仁医院崇文门院区鼻科的 **C 级规则提醒**。
+1. 北京协和医院东单院区皮肤科：`stable public-source`，只产生**新排班发布**（`schedule_released`）；
+2. 北京安贞医院朝阳院区冠心病中心：`experimental public-source`，只产生 `schedule_released`；
+3. 北京安贞医院朝阳院区心律失常中心：`experimental public-source`，只产生 `schedule_released`；
+4. 北京同仁医院崇文门院区鼻科：`rules-only`，只提供需复核的规则提醒。
 
-`availability_changed_to_available`、`cancellation_slot_detected` 和 Browser Agent 都属于实验/P1。它们可以在明确配置和测试场景中出现，但不能写入稳定版本的实时号源、退号现场闭环或预约成功承诺。
+其余 41 个 target 为 `directory-only`，可以浏览医院、院区、科室并打开 HTTPS 医院官网，但不得创建任务，也不得显示“已启用/可监控”。`availability_changed_to_available`、`cancellation_slot_detected` 和 Browser Agent 都属于历史/实验 P1；不能写成实时余号、退号现场闭环或预约成功承诺。
 
 ## 2. 用户与价值
 
@@ -33,8 +35,10 @@
 
 | 目标 | 稳定能力 | 明确不承诺 |
 |---|---|---|
-| 北京协和医院东单院区皮肤科 | 以 A 级、无需登录的官方公开排班页低频检查；基线后首次出现匹配排班时产生 `schedule_released` | 实时余号、剩余数量、从无号变有号、退号、排班移除或停诊 |
-| 北京同仁医院崇文门院区鼻科 | 保存需人工复核的规则，在预计放号时刻前提醒，并提供官方入口 | 读取小程序私有号源、医生/职称/时段匹配、实时有号或退号监测 |
+| 北京协和医院东单院区皮肤科 | `stable public-source`；低频检查严格绑定的官方公开排班，基线后首次出现匹配排班时产生 `schedule_released` | 实时余号、剩余数量、从无号变有号、退号、排班移除或停诊 |
+| 北京安贞医院朝阳院区冠心病中心、心律失常中心 | `experimental public-source`；同一官方心脏内科医学中心排班来源按两个 manifest binding 隔离，只产生 `schedule_released` | 实验来源长期稳定性、实时余号、退号、自动预约 |
+| 北京同仁医院崇文门院区鼻科 | `rules-only`；保存需人工复核的规则，在预计放号时刻前提醒，并提供官方入口 | 读取小程序私有号源、医生/职称/时段匹配、实时有号或退号监测 |
+| 其余 41 个目录 target | `directory-only`；展示官方医院入口与“待可靠公开来源” | 创建/恢复任务、自动检查、把来源候选写成已支持 |
 
 排班不等于号源。`schedule_released` 只表示官方公开页面出现新的排班，不表示该排班仍可预约。
 
@@ -58,9 +62,10 @@
 ### 4.2 关注任务
 
 - 日期必须同时满足：落在北京时间今天至今天加 14 天（含两端），且从开始日期到结束日期连续最多 14 个自然日；结束日期不得早于开始日期。
-- 协和任务可以按当前界面支持的医生、日期和时段条件匹配公开排班；不能把职称筛选写成已稳定支持。
-- 同仁 C 级任务由客户端规范化为：`matchMode=any_expert`、`doctorName=null`、空职称、`session=ANY`、只订阅 `schedule_released`，并设置规则提醒分钟。
-- API 不静默改写不合规的 C 级 payload，而是返回 `SOURCE_POLICY_VIOLATION`。
+- UI 选择顺序固定为医院 → 院区 → 科室，并直接消费 catalog target support，不按医院 ID 推断能力。
+- `public-source` 新任务只订阅 `schedule_released`；来源的 `stable/experimental` 状态按精确 target manifest binding 展示。
+- 同仁 `rules-only` 任务由客户端规范化为：`matchMode=any_expert`、`doctorName=null`、空职称、`session=ANY`、只订阅 `schedule_released`，并设置规则提醒分钟。
+- `directory-only`、inactive 或 `canCreateWatchTask=false` 的 target 禁止创建/恢复任务；API 不静默改写不合规 payload，而是返回 `SOURCE_POLICY_VIOLATION`。
 - 创建后任务默认启用；编辑、停用、恢复和删除必须保留可解释的持久状态。
 
 ### 4.3 监测、基线与空窗
@@ -156,8 +161,8 @@
 1. `npm ci --ignore-scripts` 可从锁文件重复安装，依赖版本和 `package.json` 一致；
 2. lint、类型检查、自动化测试、构建、Playwright E2E、release metadata 和 production smoke 通过；
 3. 真实磁盘 SQLite migration、checksum、单实例、备份和恢复测试通过；
-4. 涉及 schema 17 的候选完成 v16 → v17 备份、迁移、重启和恢复演练；
-5. 协和 `schedule_released` 与同仁 C 级规则提醒的 fixture/集成/用户流程门禁通过；
+4. 涉及 schema 18 的候选完成 v17 → v18 备份、迁移、重启和恢复演练，并保留 v14 真实旧 catalog schema 的升级覆盖；
+5. 协和 stable `schedule_released`、安贞两个 experimental binding、同仁 rules-only 与 directory-only fail-closed 的 fixture/集成/用户流程门禁通过；
 6. 来源测试与 E2E 禁止真实医院外联和真实通知，live/真实渠道只能由维护者显式执行；
 7. retention 验收证明快照 30 天、事件与通知 90 天，并证明每日清理幂等、不过早删除且不破坏引用完整性；
 8. 对**完整 Git 历史**（不只当前工作树）执行发布扫描：真实密钥、医院会话、个人数据、SQLite/WAL/SHM、日志、构建/测试产物、机器专属绝对路径、PID、Herdr pane 和临时交接资源必须零命中；历史中任何命中均阻塞发布，必须从历史移除后重扫；

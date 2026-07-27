@@ -7,6 +7,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../../src/server/app.js';
+import { openDatabase } from '../../src/storage/database.js';
+import { createWatchTask } from '../../src/storage/watch-tasks.js';
 
 // 固定时间：2026-07-19 08:00 北京（00:00Z），种子规则 15:00 放号、remind 30 分钟
 // → occurrence 2026-07-19T07:00:00.000Z，reminderAt 06:30Z，尚未到期，job 保持 pending。
@@ -107,6 +109,62 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
     return response.json() as { id: string };
   }
 
+  it('任意 rules-only 目标都按有效规则调度，不依赖同仁医院 ID', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-generic-rule-sched-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    const database = openDatabase(databasePath);
+    database
+      .prepare(
+        "UPDATE department SET support_mode = 'rules-only' WHERE id = 'department-pumch-dermatology'",
+      )
+      .run();
+    database.close();
+    app = await buildApp({ databasePath, now: () => FIXED_NOW, workerPollMs: 60_000 });
+
+    const rule = await app.inject({
+      method: 'POST',
+      url: '/api/release-rules',
+      headers: { host: '127.0.0.1' },
+      payload: {
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+        advanceDays: 7,
+        releaseTimeLocal: '15:00',
+        sameDayPolicy: '测试中人工核验的规则',
+        officialEntryUrl: 'https://www.pumch.cn/',
+        sourceUrl: 'https://www.pumch.cn/detail/appointment.html',
+        verifiedAt: '2026-07-19T01:00:00.000Z',
+        confidence: 'low',
+        needsReconfirmation: true,
+      },
+    });
+    expect(rule.statusCode).toBe(201);
+
+    const task = await app.inject({
+      method: 'POST',
+      url: '/api/watch-tasks',
+      headers: { host: '127.0.0.1' },
+      payload: {
+        ...taskPayload,
+        hospitalId: 'hospital-pumch',
+        campusId: 'campus-pumch-dongdan',
+        departmentId: 'department-pumch-dermatology',
+      },
+    });
+    expect(task.statusCode).toBe(201);
+    expect(listReminderJobs(databasePath)).toEqual([
+      expect.objectContaining({
+        state: 'pending',
+        payload: expect.objectContaining({
+          taskId: task.json().id,
+          ruleId: rule.json().id,
+          targetDate: '2026-07-26',
+        }),
+      }),
+    ]);
+  });
+
   it('POST 第一条同 scope 规则后立即为既有任务安排 reminder', async () => {
     const databasePath = await startApp();
     const deleted = await app!.inject({
@@ -115,7 +173,9 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
       headers: { host: '127.0.0.1' },
     });
     expect(deleted.statusCode).toBe(204);
-    const task = await createTask();
+    const legacyDatabase = openDatabase(databasePath);
+    const task = createWatchTask(legacyDatabase, taskPayload);
+    legacyDatabase.close();
     expect(listReminderJobs(databasePath)).toHaveLength(0);
 
     const rule = await createRule();
@@ -211,23 +271,20 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
     );
   });
 
-  it('PATCH 移动 scope 后旧 scope 由备用规则接管且新 scope 由移动规则接管', async () => {
+  it('PATCH 拒绝 department→campus 推导不一致的跨院区 scope', async () => {
     const databasePath = await startApp();
-    const oldTask = await createTask();
-    const backup = await createRule('16:00');
+    const task = await createTask();
 
     const catalog = new Database(databasePath);
     try {
       catalog
-        .prepare("INSERT INTO campus (id, hospital_id, name) VALUES ('campus-tongren-test', 'hospital-tongren', '测试院区')")
-        .run();
-      catalog
-        .prepare("UPDATE department SET campus_id = 'campus-tongren-test' WHERE id = 'department-tongren-rhinology'")
+        .prepare(
+          "INSERT INTO campus (id, hospital_id, name, sort_order) VALUES ('campus-tongren-test', 'hospital-tongren', '测试院区', 99)",
+        )
         .run();
     } finally {
       catalog.close();
     }
-    const newTask = await createTask({ ...taskPayload, campusId: 'campus-tongren-test' });
 
     const patched = await app!.inject({
       method: 'PATCH',
@@ -235,16 +292,15 @@ describe('Release rule 变更时的 release-reminder 重排（R3）', () => {
       headers: { host: '127.0.0.1' },
       payload: { campusId: 'campus-tongren-test' },
     });
-    expect(patched.statusCode).toBe(200);
+    expect(patched.statusCode).toBe(400);
+    expect(patched.json()).toEqual({ error: 'CATALOG_SCOPE_NOT_FOUND' });
 
     const pending = listReminderJobs(databasePath).filter((job) => job.state === 'pending');
-    expect(pending).toHaveLength(2);
-    expect(pending).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ payload: expect.objectContaining({ taskId: oldTask.id, ruleId: backup.id }) }),
-        expect.objectContaining({ payload: expect.objectContaining({ taskId: newTask.id, ruleId: RULE_ID }) }),
-      ]),
-    );
+    expect(pending).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ taskId: task.id, ruleId: RULE_ID }),
+      }),
+    ]);
   });
 
   it('DELETE 唯一规则取消其全部 pending 提醒 job', async () => {

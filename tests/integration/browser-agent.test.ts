@@ -5,7 +5,16 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
+import type { SourceAdapter } from '../../src/core/source-adapter.js';
 import { buildApp } from '../../src/server/app.js';
+
+const pumchManifestOnlyAdapter: SourceAdapter = {
+  manifest: pumchDermatologyScheduleManifest,
+  async check() {
+    throw new Error('Browser Agent 准入测试不应运行公开来源请求');
+  },
+};
 
 describe('B 级本机 Browser Agent ingest seam', () => {
   let app: FastifyInstance | undefined;
@@ -156,6 +165,8 @@ describe('B 级本机 Browser Agent ingest seam', () => {
     app = await buildApp({
       databasePath: join(directory, 'data.sqlite3'),
       browserAgentToken: token,
+      sourceAdapters: [pumchManifestOnlyAdapter],
+      workerPollMs: 60_000,
       now: () => tick,
     });
     const uiHeaders = {

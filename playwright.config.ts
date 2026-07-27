@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
 const e2eDataDirectory = join(tmpdir(), `easy-hospital-e2e-${process.pid}`);
+const e2eServerGuardStateFile = join(e2eDataDirectory, 'server-guard-state.json');
 
 export default defineConfig({
+  metadata: { e2eServerGuardStateFile },
   testDir: './tests/e2e',
   testMatch: 'ui-flow.spec.ts',
   outputDir: './artifacts/ui/playwright',
@@ -33,7 +35,10 @@ export default defineConfig({
       RADAR_HOST: '127.0.0.1',
       RADAR_PORT: '3210',
       RADAR_DATA_DIR: e2eDataDirectory,
-      EASY_HOSPITAL_DISABLE_LIVE_SOURCES: '1',
+      // B2 的 public-source 准入必须看到真实、精确的 runtime binding。E2E 因此装配
+      // 正式 adapter manifest，但 server-guard.mjs 会在 global fetch 层只放行 loopback。
+      EASY_HOSPITAL_DISABLE_LIVE_SOURCES: '0',
+      EASY_HOSPITAL_E2E_SERVER_GUARD_STATE_FILE: e2eServerGuardStateFile,
       // 显式置空全部真实通知/配对凭据。进程环境变量优先于 --env-file-if-exists
       // 加载的 .env（含空串），确保开发者本机 .env 中的真实渠道在 E2E 中不会上膛；
       // macOS 渠道没有环境变量开关，由 server-guard.mjs 的 platform 伪装禁用。

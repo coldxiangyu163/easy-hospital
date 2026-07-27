@@ -6,18 +6,36 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { pumchDermatologyScheduleManifest } from '../../src/adapters/sources/pumch.js';
 import type {
   NotificationChannel,
   NotificationSendResult,
 } from '../../src/core/notification-channel.js';
 import type { SourceAdapter } from '../../src/core/source-adapter.js';
-import { buildApp } from '../../src/server/app.js';
+import {
+  buildApp as buildBaseApp,
+  type BuildAppOptions,
+} from '../../src/server/app.js';
 import { openDatabase, type SqliteDatabase } from '../../src/storage/database.js';
 import { SqliteJobRunner } from '../../src/storage/job-runner.js';
 import {
   markDeliverySending,
   prepareDueNotificationJobs,
 } from '../../src/storage/notification-outbox.js';
+
+const pumchAdmissionAdapter: SourceAdapter = {
+  manifest: pumchDermatologyScheduleManifest,
+  async check() {
+    throw new Error('通知恢复 seam 测试不应运行准入 Adapter');
+  },
+};
+
+const buildApp = (options: BuildAppOptions) =>
+  buildBaseApp({
+    ...options,
+    sourceAdapters: [...(options.sourceAdapters ?? []), pumchAdmissionAdapter],
+    browserAgentToken: 'notification-recovery-browser-agent-token',
+  });
 
 describe('事件通知租约恢复', () => {
   let app: FastifyInstance | undefined;
@@ -271,6 +289,7 @@ describe('事件通知租约恢复', () => {
     const crashAt = observedNow + 1_000;
     database = openDatabase(databasePath);
     const runner = new SqliteJobRunner(database);
+    database.prepare("DELETE FROM job WHERE type = 'source-check'").run();
     prepareDueNotificationJobs(database, runner, [channel.key], crashAt);
     const claimed = runner.claimNext({ now: crashAt, leaseMs: 50 });
     const deliveryId = (claimed!.payload as { deliveryId: string }).deliveryId;

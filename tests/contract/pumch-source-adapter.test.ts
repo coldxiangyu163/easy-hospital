@@ -46,6 +46,18 @@ describe('PumchDermatologyScheduleAdapter contract', () => {
       transport: 'fetch',
       allowedHosts: ['www.pumch.cn', 'pumchapp.pumch.cn'],
       minIntervalMs: 7_200_000,
+      sourceId: 'source-pumch-public-schedule',
+      rateLimitKey: 'official-html:pumch.cn',
+      eventTypes: ['schedule_released'],
+      stability: 'stable',
+      bindings: [
+        expect.objectContaining({
+          targetId: 'target-pumch-dermatology',
+          hospitalId: 'hospital-pumch',
+          campusId: 'campus-pumch-dongdan',
+          departmentId: 'department-pumch-dermatology',
+        }),
+      ],
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(renderPage).not.toHaveBeenCalled();
