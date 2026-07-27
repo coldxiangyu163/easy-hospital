@@ -202,7 +202,7 @@ export function NowPage() {
 
       <aside className={styles.boundaryNote} aria-label="预约边界">
         <strong>所有预约都在官方渠道由你手动完成</strong>
-        <p>A 级是公开来源，B 级依赖本机浏览器会话，C 级只提供规则提醒。任何等级都不代替官方确认。</p>
+        <p>可关注公开排班、实验支持和仅规则提醒都只提供信息与提醒，所有预约都要在医院官方渠道由你手动完成。</p>
       </aside>
     </>
   );

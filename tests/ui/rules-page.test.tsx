@@ -22,8 +22,8 @@ const rule = {
   campusId: 'campus-tongren-chongwenmen',
   departmentId: 'department-tongren-rhinology',
   advanceDays: 7,
-  releaseTimeLocal: '07:00',
-  sameDayPolicy: '当日剩余号以官方页面为准',
+  releaseTimeLocal: '08:00',
+  sameDayPolicy: '医院说明另载每日 07:00 开放当日剩余号，以官方页面为准',
   officialEntryUrl: 'https://www.bjtrhos.cn/Html/News/Articles/7104.html',
   sourceUrl: 'https://news.bjd.com.cn/2024/07/02/10822953.shtml',
   verifiedAt: '2026-07-18T09:20:00.000Z',
@@ -56,14 +56,20 @@ describe('规则与日历', () => {
 
     expect(await screen.findByRole('heading', { name: '什么时候值得看' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '北京同仁医院 · 崇文门院区 · 鼻科' })).toBeInTheDocument();
-    expect(screen.getByText('07:00')).toBeInTheDocument();
+    expect(screen.getByText('08:00', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.getByText('提前 7 天')).toBeInTheDocument();
-    expect(screen.getByText('按规则推算，需在官方渠道确认')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '前往官方渠道（新标签页打开）' })).toHaveAttribute(
+    expect(screen.getByText('按本产品提醒时间推算，需在官方渠道确认')).toBeInTheDocument();
+    const supplement = screen.getByText('医院说明补充').closest('section');
+    expect(supplement).toHaveTextContent('每日 07:00');
+    expect(supplement).toHaveTextContent('本产品未据此安排提醒');
+    expect(screen.getAllByText('08:00')).toHaveLength(15);
+    expect(document.querySelectorAll('time[datetime]')).toHaveLength(14);
+    expect(screen.getByRole('link', { name: '查看医院规则说明（新标签页打开）' })).toHaveAttribute(
       'href',
       rule.officialEntryUrl,
     );
-    expect(screen.getByRole('link', { name: '前往官方渠道（新标签页打开）' })).toHaveAttribute('target', '_blank');
+    expect(screen.getByRole('link', { name: '查看医院规则说明（新标签页打开）' })).toHaveAttribute('target', '_blank');
+    expect(screen.getByRole('link', { name: '查看佐证来源（新标签页打开）' })).toHaveAttribute('href', rule.sourceUrl);
   });
 
   it('北京时间凌晨的可见日期与机器可读 dateTime 保持同一天', async () => {

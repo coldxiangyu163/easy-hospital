@@ -14,6 +14,7 @@ import {
   sourceBindingForTarget,
   sourceCapabilityForTarget,
   supportPresentation,
+  type CatalogTarget,
 } from '../catalog.js';
 import styles from './pages.module.css';
 
@@ -34,9 +35,9 @@ const beijingTime = (value: string): string =>
     timeStyle: 'short',
   }).format(new Date(value));
 
-const sourceRuntimeMessage = (adapter: SourceCapability): { text: string; warning: boolean } => {
-  const runtime = adapter.runtime;
-  if (!runtime) return { text: '尚无检查记录。', warning: false };
+const sourceRuntimeMessage = (source: SourceCapability): { text: string; warning: boolean } => {
+  const runtime = source.runtime;
+  if (!runtime) return { text: '尚无检查记录', warning: false };
   const lastSuccess = runtime.lastSuccessAt
     ? `上次成功：${beijingTime(runtime.lastSuccessAt)}`
     : '尚无成功记录';
@@ -46,36 +47,32 @@ const sourceRuntimeMessage = (adapter: SourceCapability): { text: string; warnin
   if (runtime.lastStatus === 'RUNNING') {
     return { text: `正在检查；${lastSuccess}`, warning: false };
   }
-  return {
-    text: `最近检查不可用${runtime.lastErrorCode ? `（${runtime.lastErrorCode}）` : ''}；${lastSuccess}`,
-    warning: true,
-  };
+  return { text: `最近检查不可用；${lastSuccess}`, warning: true };
 };
 
 const probeMessage = (result: SourceProbeResult): string => {
-  if (result.status === 'OK' && result.eventsCreated === 0) return '来源自检已完成；此次未发现新的公开排班记录。';
-  if (result.status === 'OK') return `来源自检已完成，并记录 ${result.eventsCreated} 条公开排班变化；请在通知记录中核验。`;
-  if (result.status === 'PARTIAL') return '来源仅完成部分检查；结果不代表无号，请稍后再核验。';
+  if (result.status === 'OK' && result.eventsCreated === 0) return '检查已完成；此次未发现新的公开排班记录。';
+  if (result.status === 'OK') return `检查已完成，并记录 ${result.eventsCreated} 条公开排班变化；请在通知记录中核验。`;
+  if (result.status === 'PARTIAL') return '仅完成部分检查；结果不代表无号，请稍后再核验。';
   if (result.status === 'AUTH_REQUIRED') return '来源需要登录，本次公开来源结论不可用。';
   if (result.status === 'RATE_LIMITED') return '来源限制了检查频率；请等待下一次允许时间。';
-  if (result.status === 'SOURCE_CHANGED') return '来源结构发生变化；本次结果不可用，请等待 Adapter 更新。';
-  if (result.status === 'UNSUPPORTED') return '当前 Adapter 不支持这个 target 的来源自检。';
+  if (result.status === 'SOURCE_CHANGED') return '来源结构发生变化；本次结果不可用，请等待检查程序更新。';
+  if (result.status === 'UNSUPPORTED') return '当前来源不支持立即检查。';
   return '来源暂时失败；本次结果不可用，也不代表无号。';
 };
 
-function levelMark(supportMode: string, stability: SourceCapability['stability']): string {
-  if (supportMode === 'rules-only') return '规';
-  if (supportMode === 'directory-only') return '录';
-  if (supportMode === 'browser-agent') return '页';
-  if (stability === 'stable') return '稳';
-  if (stability === 'experimental') return '试';
-  return '源';
+function sourceStatus(target: CatalogTarget, source: SourceCapability | undefined): string {
+  if (target.department.support.supportMode === 'directory-only') return '待可靠公开来源';
+  if (!source?.enabled) return '本次运行未启用';
+  if (target.department.support.supportMode === 'rules-only') return '提醒规则可用';
+  return '公开来源正在运行';
 }
 
 export function SourcesPage() {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<SourcesState>({ status: 'loading' });
   const [probeStates, setProbeStates] = useState<Record<string, ProbeState>>({});
+  const [showDirectoryTargets, setShowDirectoryTargets] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -95,20 +92,20 @@ export function SourcesPage() {
     return () => controller.abort();
   }, [attempt]);
 
-  async function runProbe(adapterKey: string) {
-    setProbeStates((current) => ({ ...current, [adapterKey]: { status: 'running' } }));
+  async function runProbe(sourceKey: string) {
+    setProbeStates((current) => ({ ...current, [sourceKey]: { status: 'running' } }));
     try {
-      const result = await api.liveProbe(adapterKey);
-      setProbeStates((current) => ({ ...current, [adapterKey]: { status: 'done', result } }));
+      const result = await api.liveProbe(sourceKey);
+      setProbeStates((current) => ({ ...current, [sourceKey]: { status: 'done', result } }));
     } catch (error) {
-      let message = '来源自检请求失败；本次没有可用结论，请稍后重试。';
+      let message = '检查请求失败；本次没有可用结论，请稍后重试。失败不代表无号。';
       if (error instanceof ApiError && (error.status === 429 || error.code === 'SOURCE_RATE_LIMITED')) {
         const wait = error.retryAfterMs
           ? `约 ${Math.max(1, Math.ceil(error.retryAfterMs / 60_000))} 分钟后`
           : '稍后';
         message = `来源检查过于频繁；请${wait}再试。本次结果不可用，也不代表无号。`;
       }
-      setProbeStates((current) => ({ ...current, [adapterKey]: { status: 'error', message } }));
+      setProbeStates((current) => ({ ...current, [sourceKey]: { status: 'error', message } }));
     }
   }
 
@@ -133,74 +130,91 @@ export function SourcesPage() {
     );
   }
 
-  const targets = state.catalog.hospitals.flatMap((hospital) =>
+  const targets: CatalogTarget[] = state.catalog.hospitals.flatMap((hospital) =>
     hospital.campuses.flatMap((campus) =>
       campus.departments.map((department) => ({ hospital, campus, department })),
     ),
   );
+  const isCreatable = (target: CatalogTarget) =>
+    target.department.support.active && target.department.support.canCreateWatchTask;
+  const creatableTargets = targets.filter(isCreatable);
+  const directoryTargets = targets.filter(
+    (target) => target.department.support.supportMode === 'directory-only',
+  );
+  const otherUnavailableTargets = targets.filter(
+    (target) => !isCreatable(target) && target.department.support.supportMode !== 'directory-only',
+  );
+  const hiddenTargets = [...directoryTargets, ...otherUnavailableTargets];
 
-  const renderTarget = ({ hospital, campus, department }: (typeof targets)[number]) => {
-    const target = { hospital, campus, department };
-    const adapter = sourceCapabilityForTarget(target, state.adapters);
-    const binding = sourceBindingForTarget(target, adapter);
-    const policy = supportPresentation(department.support, adapter);
-    const probeState = adapter ? probeStates[adapter.key] : undefined;
-    const runtimeMessage = adapter ? sourceRuntimeMessage(adapter) : undefined;
+  const renderTarget = (target: CatalogTarget) => {
+    const { hospital, campus, department } = target;
+    const source = sourceCapabilityForTarget(target, state.adapters);
+    const binding = sourceBindingForTarget(target, source);
+    const policy = supportPresentation(department.support, source);
+    const probeState = source ? probeStates[source.key] : undefined;
+    const runtimeMessage = source ? sourceRuntimeMessage(source) : undefined;
     const officialUrl = binding?.officialEntryUrl ?? officialHospitalUrl(hospital);
     const canProbe = Boolean(
-      adapter?.enabled &&
-      adapter.accessClass === 'A' &&
-      adapter.bindings?.[0]?.targetId === department.targetId,
+      source?.enabled &&
+      source.accessClass === 'A' &&
+      source.bindings?.[0]?.targetId === department.targetId,
     );
-    const sourceStatus =
-      department.support.supportMode === 'directory-only'
-        ? '待可靠公开来源'
-        : adapter?.enabled
-          ? department.support.supportMode === 'rules-only'
-            ? '规则能力已装配'
-            : '来源已装配'
-          : '本次运行未装配';
+    const status = sourceStatus(target, source);
 
     return (
       <article className={styles.sourceRow} key={department.targetId}>
-        <div
-          className={styles.sourceLevel}
-          aria-label={`${policy.title}${adapter?.stability ? `，${adapter.stability}` : ''}`}
-        >
-          {levelMark(department.support.supportMode, adapter?.stability)}
-        </div>
         <div className={styles.sourceMain}>
           <h2>{hospital.name} · {campus.name} · {department.name}</h2>
           <strong>{policy.title}</strong>
-          <p>{policy.description}</p>
-          <code className={styles.adapterKey}>{department.targetId}</code>
-          {adapter?.sourceId ? <code className={styles.adapterKey}>{adapter.sourceId}</code> : null}
-          {adapter ? <code className={styles.adapterKey}>{adapter.key}</code> : null}
-          {adapter && department.support.supportMode === 'public-source' && runtimeMessage ? (
+          <details className={styles.sourceTechnicalDetails}>
+            <summary>技术详情</summary>
+            <p>{policy.description}</p>
+            <dl>
+              <div><dt>Target ID</dt><dd><code>{department.targetId}</code></dd></div>
+              <div><dt>Support mode</dt><dd><code>{department.support.supportMode}</code></dd></div>
+              <div><dt>Active / can create</dt><dd><code>{String(department.support.active)} / {String(department.support.canCreateWatchTask)}</code></dd></div>
+              {source?.sourceId ? <div><dt>Source ID</dt><dd><code>{source.sourceId}</code></dd></div> : null}
+              {source ? <div><dt>Adapter key</dt><dd><code>{source.key}</code></dd></div> : null}
+              {source ? <div><dt>Enabled</dt><dd><code>{String(source.enabled)}</code></dd></div> : null}
+              {source ? <div><dt>Access / transport</dt><dd><code>{source.accessClass} / {source.transport}</code></dd></div> : null}
+              {source?.minIntervalMs !== undefined ? <div><dt>Minimum interval</dt><dd><code>{String(source.minIntervalMs)}</code></dd></div> : null}
+              {source?.stability ? <div><dt>Stability</dt><dd><code>{source.stability}</code></dd></div> : null}
+              {source ? <div><dt>Event types</dt><dd><code>{source.eventTypes?.join(', ') || 'none'}</code></dd></div> : null}
+              {source ? <div><dt>Capabilities</dt><dd><code>{JSON.stringify(source.capabilities)}</code></dd></div> : null}
+              {source?.runtime?.lastAttemptAt ? <div><dt>Last attempt</dt><dd><code>{source.runtime.lastAttemptAt}</code></dd></div> : null}
+              {source?.runtime?.lastSuccessAt ? <div><dt>Last success</dt><dd><code>{source.runtime.lastSuccessAt}</code></dd></div> : null}
+              {source?.runtime?.lastStatus ? <div><dt>Last status</dt><dd><code>{source.runtime.lastStatus}</code></dd></div> : null}
+              {source?.runtime?.lastErrorCode ? <div><dt>Last error</dt><dd><code>{source.runtime.lastErrorCode}</code></dd></div> : null}
+              {binding ? <div><dt>Binding</dt><dd><code>{binding.targetId} / {binding.hospitalId} / {binding.campusId} / {binding.departmentId}</code></dd></div> : null}
+              {binding?.officialEntryUrl ? <div><dt>Official URL</dt><dd><code>{binding.officialEntryUrl}</code></dd></div> : null}
+            </dl>
+          </details>
+        </div>
+        <div className={styles.sourceStatusGroup}>
+          <span className={source?.enabled ? styles.statusGood : styles.statusWarning}>{status}</span>
+          {runtimeMessage && department.support.supportMode === 'public-source' ? (
             <p className={runtimeMessage.warning ? styles.probeError : styles.probeResult}>
               {runtimeMessage.text}
             </p>
           ) : null}
-        </div>
-        <div className={styles.sourceStatusGroup}>
-          <span className={adapter?.enabled ? styles.statusGood : styles.statusWarning}>
-            {sourceStatus}
-          </span>
           {officialUrl ? (
             <a className={styles.secondaryButton} href={officialUrl} target="_blank" rel="noreferrer">
-              打开医院官方入口<span className={styles.visuallyHidden}>（新标签页打开）</span>
+              打开医院官网或科室页<span className={styles.visuallyHidden}>（新标签页打开）</span>
             </a>
           ) : null}
-          {canProbe && adapter ? (
-            <button
-              className={styles.secondaryButton}
-              type="button"
-              disabled={probeState?.status === 'running'}
-              onClick={() => void runProbe(adapter.key)}
-              aria-label={`自检 ${hospital.name} ${campus.name} ${department.name} 公开来源`}
-            >
-              {probeState?.status === 'running' ? '正在自检…' : '运行公开来源自检'}
-            </button>
+          {canProbe && source ? (
+            <div className={styles.probeAction}>
+              <p>会访问医院公开网络，结果可能写入事件和通知记录；失败不代表无号。</p>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                disabled={probeState?.status === 'running'}
+                onClick={() => void runProbe(source.key)}
+                aria-label={`立即检查并记录${hospital.name}${campus.name}${department.name}的新变化`}
+              >
+                {probeState?.status === 'running' ? '正在检查并记录…' : '立即检查并记录新变化'}
+              </button>
+            </div>
           ) : null}
           {canProbe && probeState?.status === 'done' ? (
             <p className={styles.probeResult} role="status">{probeMessage(probeState.result)}</p>
@@ -213,73 +227,85 @@ export function SourcesPage() {
     );
   };
 
+  const renderHospitals = (visibleTargets: CatalogTarget[], directoryOnly: boolean) =>
+    state.catalog.hospitals.flatMap((hospital) => {
+      const hospitalTargets = visibleTargets.filter((target) => target.hospital.id === hospital.id);
+      if (hospitalTargets.length === 0) return [];
+      return [
+        <section className={styles.sourceHospital} key={`${directoryOnly ? 'directory' : 'creatable'}-${hospital.id}`}>
+          <header className={styles.sourceHospitalHeader}>
+            <div>
+              <h2>{hospital.name}</h2>
+              <small>{hospitalTargets.length} 个科室</small>
+            </div>
+            <span className={directoryOnly ? styles.statusMuted : styles.statusGood}>
+              {directoryOnly ? '仅供目录浏览' : `${hospitalTargets.length} 个可创建提醒`}
+            </span>
+            <small>查看下方科室与下一步</small>
+          </header>
+          <div>{hospitalTargets.map(renderTarget)}</div>
+        </section>,
+      ];
+    });
+
+  const browserSource = state.adapters.find(
+    (item) => item.key === 'browser-agent' && item.transport === 'local-agent',
+  );
+
   return (
     <>
       <header className={styles.pageHeader}>
         <p className={styles.eyebrow}>数据来源</p>
-        <h1 className={styles.pageTitle}>11 家医院，逐个 target 说明能力</h1>
-        <p className={styles.pageLead}>目录可浏览不等于已经支持。当前只有协和皮肤科稳定公开来源、安贞两个中心实验性公开来源，以及同仁鼻科规则提醒；其余 target 等待可靠公开来源。</p>
+        <h1 className={styles.pageTitle}>{creatableTargets.length} 个科室可创建提醒</h1>
+        <p className={styles.pageLead}>先看当前能创建什么，再按需展开完整目录。目录可浏览不等于已经支持提醒。</p>
       </header>
 
-      <section className={styles.sourceIntro}>
+      <section className={styles.sourceIntro} aria-label="来源能力数量">
+        <div><span>可创建提醒</span><strong>{creatableTargets.length}</strong></div>
+        <div><span>仅目录</span><strong>{directoryTargets.length}</strong></div>
+        <div><span>本机服务</span><strong>{state.health.status === 'healthy' ? '正常' : '需要处理'}</strong></div>
+      </section>
+
+      <section className={styles.sourceList} aria-label="优先显示可创建提醒的医院和科室">
+        {renderHospitals(creatableTargets, false)}
+      </section>
+
+      {hiddenTargets.length > 0 ? (
+        <section className={styles.directorySection} aria-label="其余目录目标">
+          <button
+            className={styles.secondaryButton}
+            type="button"
+            aria-expanded={showDirectoryTargets}
+            onClick={() => setShowDirectoryTargets((value) => !value)}
+          >
+            {showDirectoryTargets ? '收起其余目录目标' : `显示其余 ${hiddenTargets.length} 个目录目标`}
+          </button>
+          {showDirectoryTargets ? (
+            <div className={styles.sourceList}>{renderHospitals(hiddenTargets, true)}</div>
+          ) : null}
+        </section>
+      ) : null}
+
+      <details className={styles.sourceSystemDetails}>
+        <summary>本机页面读取技术详情</summary>
         <div>
-          <span>本机健康 API</span>
-          <strong>{state.health.status === 'healthy' ? '本机服务正常' : '本机服务需要处理'}</strong>
+          <h2>实验性本机 Browser Agent</h2>
+          <p>用户主动单次读取，不是后台监控。状态可能立即失效，不承诺实时余号或退号，也不会自动扩大扩展 scope。</p>
+          {browserSource ? (
+            <dl>
+              <div><dt>Adapter key</dt><dd><code>{browserSource.key}</code></dd></div>
+              <div><dt>Access / transport</dt><dd><code>{browserSource.accessClass} / {browserSource.transport}</code></dd></div>
+              <div><dt>Enabled</dt><dd><code>{String(browserSource.enabled)}</code></dd></div>
+              <div><dt>Minimum interval</dt><dd><code>{String(browserSource.minIntervalMs)}</code></dd></div>
+              <div><dt>Capabilities</dt><dd><code>{JSON.stringify(browserSource.capabilities)}</code></dd></div>
+            </dl>
+          ) : <p>本次运行未装配。</p>}
         </div>
-        <p>{state.catalog.hospitals.length} 家医院 · {targets.length} 个 target</p>
-      </section>
-
-      <section className={styles.sourceList} aria-label="医院、院区、科室及来源支持范围">
-        {state.catalog.hospitals.map((hospital) => {
-          const hospitalTargets = targets.filter((target) => target.hospital.id === hospital.id);
-          const supportedCount = hospitalTargets.filter(
-            ({ department }) => department.support.supportMode !== 'directory-only',
-          ).length;
-          const campusCount = hospital.campuses.length;
-          return (
-            <details
-              className={styles.sourceHospital}
-              key={hospital.id}
-              open={supportedCount > 0}
-            >
-              <summary>
-                <span>
-                  <strong>{hospital.name}</strong>
-                  <small>{campusCount} 个院区 · {hospitalTargets.length} 个 target</small>
-                </span>
-                <span className={supportedCount > 0 ? styles.statusGood : styles.statusWarning}>
-                  {supportedCount > 0 ? `${supportedCount} 个可创建任务` : '全部仅目录'}
-                </span>
-              </summary>
-              <div>{hospitalTargets.map(renderTarget)}</div>
-            </details>
-          );
-        })}
-
-        {(() => {
-          const browserAdapter = state.adapters.find(
-            (item) => item.key === 'browser-agent' && item.transport === 'local-agent',
-          );
-          return (
-            <article className={styles.sourceRow}>
-              <div className={styles.sourceLevel} aria-label="实验性本机 Browser Agent">页</div>
-              <div className={styles.sourceMain}>
-                <h2>实验性本机 Browser Agent</h2>
-                <strong>用户主动单次读取，不是后台监控</strong>
-                <p>只返回人工触发时页面可见的脱敏状态。状态可能立即失效，不承诺实时余号或退号；11 家目录不会自动扩大扩展 scope。</p>
-                {browserAdapter ? <code className={styles.adapterKey}>{browserAdapter.key}</code> : null}
-              </div>
-              <span className={browserAdapter?.enabled ? styles.statusGood : styles.statusMuted}>
-                {browserAdapter?.enabled ? '已配对' : '未配置'}
-              </span>
-            </article>
-          );
-        })()}
-      </section>
+      </details>
 
       <aside className={styles.boundaryNote}>
         <strong>空响应和来源失败都不是“无号”</strong>
-        <p>公开来源只表示排班；规则来源只安排提醒；directory-only 只提供目录和官网入口。所有预约必须在官方渠道手动完成。</p>
+        <p>公开排班只表示排班发布；仅规则提醒只安排提醒；目录目标只提供目录和官网或科室页。所有预约必须在官方渠道手动完成。</p>
       </aside>
     </>
   );

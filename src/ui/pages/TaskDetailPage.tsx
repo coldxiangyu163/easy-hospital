@@ -124,11 +124,20 @@ export function TaskDetailPage() {
           </span>
           <h2>{state.event ? eventLabel(state.event) : (ruleOnly ? '等待下一次规则提醒' : '当前没有检测事件')}</h2>
           {state.event ? (
-            <p>
-              检测时间 {new Date(state.event.detectedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} ·
-              来源 {state.event.sourceId} · {state.event.evidence === 'explicit' ? '明确证据' : '推断事件'}。
-              这不是预约成功，结果可能随时变化。
-            </p>
+            <>
+              <p>
+                检测时间 {new Date(state.event.detectedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} ·
+                {state.event.evidence === 'explicit' ? '明确证据' : '推断事件'}。
+                这不是预约成功，结果可能随时变化。
+              </p>
+              <details className={styles.technicalDetails}>
+                <summary>技术详情</summary>
+                <p>Event ID：<code>{state.event.id}</code></p>
+                <p>Source ID：<code>{state.event.sourceId}</code></p>
+                <p>Event type：<code>{state.event.eventType}</code></p>
+                <p>Evidence：<code>{state.event.evidence}</code></p>
+              </details>
+            </>
           ) : ruleOnly ? (
             <p>这项任务只依据已核验规则安排提醒，不读取实时号源，也不推断有号、无号或退号。</p>
           ) : (
@@ -153,7 +162,7 @@ export function TaskDetailPage() {
         </dl>
         <div className={styles.actions}>
           {officialUrl ? (
-            <a className={styles.primaryButton} href={officialUrl} target="_blank" rel="noreferrer">前往官方渠道核验<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
+            <a className={styles.primaryButton} href={officialUrl} target="_blank" rel="noreferrer">打开官方说明核验<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
           ) : null}
           <Link className={officialUrl ? styles.secondaryButton : styles.primaryButton} to={`/tasks/${encodeURIComponent(state.task.id)}/edit`}>编辑关注条件</Link>
           <Link className={styles.secondaryButton} to="/rules">查看规则与日历</Link>

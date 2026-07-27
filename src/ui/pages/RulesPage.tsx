@@ -99,8 +99,8 @@ export function RulesPage() {
     return (
       <section className={styles.statusPanel}>
         <p className={styles.eyebrow}>规则与日历</p>
-        <h1 className={styles.pageTitle}>还没有与 catalog target 精确匹配的规则</h1>
-        <p>系统不会把其他医院、院区或科室的规则套到当前 target，也不会虚构放号时间。</p>
+        <h1 className={styles.pageTitle}>还没有与所选医院和科室匹配的规则</h1>
+        <p>系统不会把其他医院、院区或科室的规则套用到这里，也不会虚构放号时间。</p>
         <div className={styles.actions}>
           <Link className={styles.primaryButton} to="/tasks/new">浏览医院目录</Link>
           <Link className={styles.secondaryButton} to="/sources">查看数据来源</Link>
@@ -136,13 +136,17 @@ export function RulesPage() {
               </header>
 
               <div className={styles.ruleFacts}>
-                <div><span>常规放号</span><strong>{rule.releaseTimeLocal}</strong></div>
-                <div><span>预约范围</span><strong>提前 {rule.advanceDays} 天</strong></div>
+                <div><span>本产品提醒时间</span><strong>{rule.releaseTimeLocal}</strong></div>
+                <div><span>可关注日期范围</span><strong>提前 {rule.advanceDays} 天</strong></div>
                 <div><span>最后核验</span><strong>{new Date(rule.verifiedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</strong></div>
               </div>
 
-              <p className={styles.rulePolicy}>{rule.sameDayPolicy}</p>
-              <p className={styles.calendarDisclaimer}>按规则推算，需在官方渠道确认</p>
+              <section className={styles.ruleSupplement} aria-label="医院说明补充">
+                <strong>医院说明补充</strong>
+                <p>{rule.sameDayPolicy}</p>
+                <small>本产品未据此安排提醒；本产品日历和提醒只使用上方的 {rule.releaseTimeLocal}。</small>
+              </section>
+              <p className={styles.calendarDisclaimer}>按本产品提醒时间推算，需在官方渠道确认</p>
               <ol className={styles.calendarStrip} aria-label="未来 14 天规则推算">
                 {Array.from({ length: 14 }, (_, index) => {
                   const releaseDate = addDays(today, index);
@@ -150,16 +154,16 @@ export function RulesPage() {
                   return (
                     <li key={releaseDate}>
                       <time dateTime={releaseDate}>{formatBeijingDate(releaseDate)}</time>
-                      <span>预计 {rule.releaseTimeLocal}</span>
-                      <small>目标 {formatBeijingDate(appointmentDate)}</small>
+                      <span>{rule.releaseTimeLocal}</span>
+                      <small>{formatBeijingDate(appointmentDate)}</small>
                     </li>
                   );
                 })}
               </ol>
 
               <div className={styles.actions}>
-                <a className={styles.primaryButton} href={rule.officialEntryUrl} target="_blank" rel="noreferrer">前往官方渠道<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
-                <a className={styles.secondaryButton} href={rule.sourceUrl} target="_blank" rel="noreferrer">查看信息来源<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
+                <a className={styles.primaryButton} href={rule.officialEntryUrl} target="_blank" rel="noreferrer">查看医院规则说明<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
+                <a className={styles.secondaryButton} href={rule.sourceUrl} target="_blank" rel="noreferrer">查看佐证来源<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
               </div>
             </article>
           );

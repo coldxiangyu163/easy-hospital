@@ -106,6 +106,10 @@ describe('现在页面', () => {
       '/tasks/new',
     );
     expect(screen.queryByText(/检测到可用号源|发现退号/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('预约边界')).toHaveTextContent(
+      '可关注公开排班、实验支持和仅规则提醒都只提供信息与提醒，所有预约都要在医院官方渠道由你手动完成。',
+    );
+    expect(screen.getByLabelText('预约边界')).not.toHaveTextContent(/A 级|B 级|C 级/);
   });
 
   it('顶层 status 为 healthy 但 worker degraded 时，首屏提示先检查 Worker', async () => {

@@ -51,8 +51,12 @@ describe('关注任务详情', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '检测记录出现有号变化' })).toBeInTheDocument();
-    expect(screen.getByText(/检测时间/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '前往官方渠道核验（新标签页打开）' })).toHaveAttribute('href', event.payload.officialEntryUrl);
+    expect(screen.getByText(/检测时间/)).not.toHaveTextContent('pumch-public');
+    const technicalDetails = screen.getByText('技术详情').closest('details');
+    expect(technicalDetails).not.toHaveAttribute('open');
+    expect(technicalDetails).toHaveTextContent('pumch-public');
+    expect(technicalDetails).toHaveTextContent('availability_changed_to_available');
+    expect(screen.getByRole('link', { name: '打开官方说明核验（新标签页打开）' })).toHaveAttribute('href', event.payload.officialEntryUrl);
     expect(screen.queryByText('预约成功')).not.toBeInTheDocument();
   });
 });

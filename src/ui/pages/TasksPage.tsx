@@ -203,7 +203,7 @@ export function TasksPage() {
               <div className={styles.taskMain}>
                 <Link className={styles.taskTitle} to={`/tasks/${encodeURIComponent(task.id)}`}>{label}</Link>
                 <p>{task.dateFrom} 至 {task.dateTo} · {policy.title}</p>
-                {!policy.canCreateWatchTask ? <p>该 target 当前不能创建或恢复任务，既有记录仍可查看和暂停。</p> : null}
+                {!policy.canCreateWatchTask ? <p>当前暂不支持恢复提醒；既有记录仍可查看。</p> : null}
               </div>
               <span className={task.enabled ? styles.statusGood : styles.statusMuted}>
                 {task.enabled ? policy.activityLabel : '已暂停'}
@@ -215,7 +215,7 @@ export function TasksPage() {
                   type="button"
                   disabled={busy || (!task.enabled && !policy.canCreateWatchTask)}
                   aria-label={`${task.enabled ? '暂停' : '恢复'}关注 ${label}`}
-                  title={!task.enabled && !policy.canCreateWatchTask ? '当前 target 支持级别不允许恢复' : undefined}
+                  title={!task.enabled && !policy.canCreateWatchTask ? '当前提醒能力不允许恢复' : undefined}
                   onClick={() => void toggle(task)}
                 >
                   {task.enabled ? '暂停' : '恢复'}

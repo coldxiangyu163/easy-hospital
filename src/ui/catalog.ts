@@ -134,45 +134,45 @@ export function supportPresentation(
 ): SupportPresentation {
   if (!support) {
     return {
-      title: '能力信息不可用',
-      description: '目录没有返回该 target 的支持信息。为避免误报，不能创建或恢复任务。',
-      activityLabel: '能力未知',
+      title: '暂不支持提醒',
+      description: '目录没有返回可核验的提醒能力。为避免误报，不能创建或恢复提醒。',
+      activityLabel: '提醒能力未知',
       canCreateWatchTask: false,
       ruleOnly: false,
     };
   }
   if (!support.active) {
     return {
-      title: '历史目标已停用',
-      description: '该 target 仅用于读取既有记录，当前不能创建或恢复任务。',
-      activityLabel: '目标已停用',
+      title: '暂不支持提醒',
+      description: '这个科室的提醒能力已经停用，仅可读取既有记录，当前不能创建或恢复提醒。',
+      activityLabel: '提醒能力已停用',
       canCreateWatchTask: false,
       ruleOnly: support.supportMode === 'rules-only',
     };
   }
   if (support.supportMode === 'directory-only') {
     return {
-      title: '仅目录，待可靠公开来源',
-      description: '可以查看院区、科室和医院官网，但当前没有通过严格解析的公开来源或有效规则，不能创建关注任务。',
-      activityLabel: '仅目录',
+      title: '暂不支持提醒',
+      description: '可以查看院区、科室和医院官网，但当前没有可可靠检查的公开排班或已确认规则。',
+      activityLabel: '仅供目录浏览',
       canCreateWatchTask: false,
       ruleOnly: false,
     };
   }
   if (support.supportMode === 'rules-only') {
     return {
-      title: '规则提醒',
-      description: '只按已记录且可复核的规则安排提醒，并提供官方入口；不读取实时余号，也不推断退号。',
-      activityLabel: '规则提醒已启用',
+      title: '仅规则提醒',
+      description: '只按已记录且可复核的规则安排提醒，并提供官方说明；不读取实时余号，也不推断退号。',
+      activityLabel: '仅规则提醒已启用',
       canCreateWatchTask: support.canCreateWatchTask,
       ruleOnly: true,
     };
   }
   if (support.supportMode === 'browser-agent') {
     return {
-      title: '实验性本机页面读取',
+      title: '实验支持',
       description: '只表示用户主动读取时页面可见的脱敏状态，可能立即失效，不是后台实时监控。',
-      activityLabel: '实验性页面读取',
+      activityLabel: '实验支持已启用',
       canCreateWatchTask: support.canCreateWatchTask,
       ruleOnly: false,
     };
@@ -180,17 +180,12 @@ export function supportPresentation(
 
   const stability = support.stability ?? source?.stability;
   return {
-    title:
-      stability === 'stable'
-        ? '稳定公开排班来源'
-        : stability === 'experimental'
-          ? '实验性公开排班来源'
-          : '公开排班来源',
+    title: stability === 'experimental' ? '实验支持' : '可关注公开排班',
     description:
       stability === 'experimental'
-        ? '来源已绑定到这个 target，但仍处于实验阶段。只识别官方公开排班，不代表实时余号，也不推断退号。'
+        ? '这个公开排班来源仍在实验阶段。只识别官方公开排班，不代表实时余号，也不推断退号。'
         : '只识别官方公开页面中的新排班发布。排班不等于实时余号，也不推断退号。',
-    activityLabel: '公开排班关注已启用',
+    activityLabel: stability === 'experimental' ? '实验支持已启用' : '公开排班关注已启用',
     canCreateWatchTask: support.canCreateWatchTask,
     ruleOnly: false,
   };

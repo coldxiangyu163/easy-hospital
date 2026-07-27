@@ -170,37 +170,49 @@ describe('数据来源', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: '11 家医院，逐个 target 说明能力' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '4 个科室可创建提醒' })).toBeInTheDocument();
+    expect(screen.getByText('可创建提醒')).toBeInTheDocument();
+    expect(screen.getByText('4', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.getByText('仅目录')).toBeInTheDocument();
+    expect(screen.getByText('2', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '北京协和医院 · 东单院区 · 皮肤科' })).toBeInTheDocument();
-    expect(screen.getByText('稳定公开排班来源')).toBeInTheDocument();
-    expect(screen.getByText('source-pumch-public-schedule')).toBeInTheDocument();
+    expect(screen.getByText('可关注公开排班')).toBeInTheDocument();
+    const sourceAudit = screen.getByText('source-pumch-public-schedule').closest('details');
+    expect(sourceAudit).not.toHaveAttribute('open');
+    expect(sourceAudit).toHaveTextContent('pumch-public-dermatology-schedule');
+    expect(sourceAudit).toHaveTextContent('target-pumch-dermatology');
+    expect(sourceAudit).toHaveTextContent('stable');
     expect(screen.queryByText('source-decoy')).not.toBeInTheDocument();
-    expect(screen.getByText(/最近检查不可用（SOURCE_CHECK_FAILED）/)).toBeInTheDocument();
-    expect(screen.getByText(/上次成功：2026年7月27日 16:00/)).toBeInTheDocument();
+    expect(screen.getByText(/最近检查不可用；上次成功：2026年7月27日 16:00/)).toBeInTheDocument();
+    expect(sourceAudit).toHaveTextContent('SOURCE_CHECK_FAILED');
 
     expect(screen.getByRole('heading', { name: '北京同仁医院 · 崇文门院区 · 鼻科' })).toBeInTheDocument();
-    expect(screen.getByText('规则提醒')).toBeInTheDocument();
-    expect(screen.getByText('rules-only:target-tongren-rhinology')).toBeInTheDocument();
+    expect(screen.getByText('仅规则提醒')).toBeInTheDocument();
+    expect(screen.getByText('rules-only:target-tongren-rhinology').closest('details')).not.toHaveAttribute('open');
 
     const anzhenCoronary = screen.getByRole('heading', { name: '北京安贞医院 · 朝阳院区 · 冠心病中心' }).closest('article')!;
     const anzhenArrhythmia = screen.getByRole('heading', { name: '北京安贞医院 · 朝阳院区 · 心律失常中心' }).closest('article')!;
-    expect(within(anzhenCoronary).getByText('实验性公开排班来源')).toBeInTheDocument();
-    expect(within(anzhenArrhythmia).getByText('实验性公开排班来源')).toBeInTheDocument();
-    expect(within(anzhenCoronary).getByText('source-anzhen-public-heart-center-schedule')).toBeInTheDocument();
+    expect(within(anzhenCoronary).getByText('实验支持')).toBeInTheDocument();
+    expect(within(anzhenArrhythmia).getByText('实验支持')).toBeInTheDocument();
+    expect(within(anzhenCoronary).getByText('source-anzhen-public-heart-center-schedule').closest('details')).not.toHaveAttribute('open');
 
-    fireEvent.click(screen.getByText('北京大学人民医院'));
+    expect(screen.queryByRole('heading', { name: '北京大学人民医院 · 西直门 · 血液科' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '显示其余 2 个目录目标' }));
     const directoryRow = screen.getByRole('heading', { name: '北京大学人民医院 · 西直门 · 血液科' }).closest('article')!;
-    expect(within(directoryRow).getByText('仅目录，待可靠公开来源')).toBeInTheDocument();
+    expect(within(directoryRow).getByText('暂不支持提醒')).toBeInTheDocument();
     expect(within(directoryRow).getByText('待可靠公开来源')).toBeInTheDocument();
-    expect(within(directoryRow).getByRole('link', { name: '打开医院官方入口（新标签页打开）' }))
+    expect(within(directoryRow).getByRole('link', { name: '打开医院官网或科室页（新标签页打开）' }))
       .toHaveAttribute('href', 'https://www.pkuph.cn/');
     expect(within(directoryRow).queryByText(/已启用|来源已装配/)).not.toBeInTheDocument();
 
-    expect(screen.getByRole('heading', { name: '实验性本机 Browser Agent' })).toBeInTheDocument();
-    expect(screen.getByText(/11 家目录不会自动扩大扩展 scope/)).toBeInTheDocument();
+    const browserDetails = screen.getByText('本机页面读取技术详情').closest('details');
+    expect(browserDetails).not.toHaveAttribute('open');
+    expect(browserDetails).toHaveTextContent('Browser Agent');
+    expect(browserDetails).toHaveTextContent('browser-agent');
 
-    fireEvent.click(screen.getByRole('button', { name: '自检 北京协和医院 东单院区 皮肤科 公开来源' }));
-    expect(await screen.findByText('来源自检已完成；此次未发现新的公开排班记录。')).toBeInTheDocument();
+    expect(screen.getAllByText(/会访问医院公开网络，结果可能写入事件和通知记录；失败不代表无号/)).not.toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: '立即检查并记录北京协和医院东单院区皮肤科的新变化' }));
+    expect(await screen.findByText('检查已完成；此次未发现新的公开排班记录。')).toBeInTheDocument();
   });
 
   it('来源限流时展示等待时间，不把 429 当作未知来源结果', async () => {
@@ -222,8 +234,8 @@ describe('数据来源', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('heading', { name: '11 家医院，逐个 target 说明能力' });
-    fireEvent.click(screen.getByRole('button', { name: '自检 北京协和医院 东单院区 皮肤科 公开来源' }));
+    await screen.findByRole('heading', { name: '1 个科室可创建提醒' });
+    fireEvent.click(screen.getByRole('button', { name: '立即检查并记录北京协和医院东单院区皮肤科的新变化' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
       '来源检查过于频繁；请约 5 分钟后再试。本次结果不可用，也不代表无号。',
     );

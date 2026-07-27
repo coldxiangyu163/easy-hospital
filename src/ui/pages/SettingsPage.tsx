@@ -125,7 +125,7 @@ export function SettingsPage() {
             <span>核心本机服务</span>
             <h2>{coreHealthy ? '核心本机服务已启动' : '核心本机服务需要处理'}</h2>
           </div>
-          <strong>{targetCount} 个 catalog 目标</strong>
+          <strong>{targetCount} 个目录目标</strong>
         </section>
         <section className={notificationsReady ? styles.setupSummaryGood : styles.setupSummaryWarning}>
           <div>

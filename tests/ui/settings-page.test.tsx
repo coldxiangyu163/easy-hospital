@@ -69,6 +69,8 @@ describe('首次配置与本机设置', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('核心本机服务已启动')).toBeInTheDocument();
     expect(screen.getByText('已启用 1 个真实通知渠道')).toBeInTheDocument();
+    expect(screen.getByText('0 个目录目标')).toBeInTheDocument();
+    expect(screen.queryByText(/catalog 目标/)).not.toBeInTheDocument();
     const summary = screen.getByLabelText('当前状态摘要');
     const detailHeading = screen.getByRole('heading', { name: '详细状态' });
     const recheck = screen.getByRole('button', { name: '重新检查' });

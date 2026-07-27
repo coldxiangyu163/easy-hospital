@@ -217,7 +217,7 @@ describe('创建关注任务', () => {
     expect(screen.getByRole('group', { name: '关注对象' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: '匹配条件' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: '目标就诊日期与时段' })).toBeInTheDocument();
-    expect(screen.getByText('稳定公开排班来源')).toBeInTheDocument();
+    expect(screen.getByText('可关注公开排班')).toBeInTheDocument();
     expect(screen.queryByLabelText(/实验性 B 级/)).not.toBeInTheDocument();
     const technicalDetails = screen.getByText('技术详情').closest('details');
     expect(technicalDetails).not.toHaveAttribute('open');
@@ -279,7 +279,7 @@ describe('创建关注任务', () => {
     fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-tongren' } });
     expect(screen.queryByLabelText('关注范围')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('时段')).not.toBeInTheDocument();
-    expect(screen.getByText('规则提醒')).toBeInTheDocument();
+    expect(screen.getByText('仅规则提醒')).toBeInTheDocument();
     expect(screen.getByText(/规则提醒会按规则时间发送；规则标记为需复核时/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-07-28' } });
@@ -318,7 +318,7 @@ describe('创建关注任务', () => {
     expect(screen.getByLabelText('科室')).toHaveValue('department-jishuitan-trauma-orthopedics');
     fireEvent.change(screen.getByLabelText('院区'), { target: { value: 'campus-jishuitan-huilongguan' } });
     expect(screen.getByLabelText('科室')).toHaveValue('department-jishuitan-burn-plastic-wound-repair');
-    expect(screen.getByText('仅目录，待可靠公开来源')).toBeInTheDocument();
+    expect(screen.getByText('暂不支持提醒')).toBeInTheDocument();
     expect(screen.queryByLabelText('开始日期')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
     expect(screen.getByText('当前不能创建提醒：这个科室还没有可可靠检查的公开排班或已确认规则。')).toBeInTheDocument();
@@ -344,16 +344,16 @@ describe('创建关注任务', () => {
     await screen.findByRole('heading', { name: '新增一件关注' });
     fireEvent.change(screen.getByLabelText('医院'), { target: { value: 'hospital-anzhen' } });
     expect(screen.getByLabelText('科室')).toHaveValue('department-anzhen-coronary-heart-disease-center');
-    expect(screen.getByText('实验性公开排班来源')).toBeInTheDocument();
+    expect(screen.getByText('实验支持')).toBeInTheDocument();
     expect(screen.getByText('技术详情').closest('details')).toHaveTextContent('source-anzhen-public-heart-center-schedule');
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeEnabled();
 
     fireEvent.change(screen.getByLabelText('科室'), { target: { value: 'department-anzhen-arrhythmia-center' } });
-    expect(screen.getByText('实验性公开排班来源')).toBeInTheDocument();
+    expect(screen.getByText('实验支持')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeEnabled();
 
     fireEvent.change(screen.getByLabelText('科室'), { target: { value: 'department-anzhen-cardiac-surgery' } });
-    expect(screen.getByText('仅目录，待可靠公开来源')).toBeInTheDocument();
+    expect(screen.getByText('暂不支持提醒')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
   });
 

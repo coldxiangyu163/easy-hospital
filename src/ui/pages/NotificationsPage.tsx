@@ -181,7 +181,7 @@ export function NotificationsPage() {
                 {deliverySummary(batch) ? <small>{deliverySummary(batch)}</small> : null}
               </div>
               <span className={status.className}>{status.label}</span>
-              <a className={styles.secondaryButton} href={batch.officialEntryUrl} target="_blank" rel="noreferrer">前往官方渠道核验<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
+              <a className={styles.secondaryButton} href={batch.officialEntryUrl} target="_blank" rel="noreferrer">打开官方说明核验<span className={styles.visuallyHidden}>（新标签页打开）</span></a>
             </article>
           );
         })}

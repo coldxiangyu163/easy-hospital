@@ -2,9 +2,9 @@
 
 import '@testing-library/jest-dom/vitest';
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/ui/App.js';
 import { pumchCatalog as catalog } from '../support/ui-catalog.js';
@@ -34,6 +34,8 @@ const task = {
   createdAt: '2026-07-19T01:00:00.000Z',
   updatedAt: '2026-07-19T01:00:00.000Z',
 };
+
+afterEach(cleanup);
 
 describe('管理关注任务', () => {
   it('通过 API 暂停并确认删除，删除后显示真实空状态', async () => {
@@ -90,5 +92,28 @@ describe('管理关注任务', () => {
 
     await waitFor(() => expect(screen.getByRole('heading', { name: '还没有关注任务' })).toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith('/api/watch-tasks/task-1', expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('提醒能力不可用时用患者语言说明不能恢复', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/catalog') return jsonResponse({ hospitals: [] });
+      if (path === '/api/watch-tasks') return jsonResponse({ tasks: [{ ...task, enabled: false }] });
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('当前暂不支持恢复提醒；既有记录仍可查看。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /恢复关注/ })).toHaveAttribute(
+      'title',
+      '当前提醒能力不允许恢复',
+    );
+    expect(document.body).not.toHaveTextContent('target');
   });
 });

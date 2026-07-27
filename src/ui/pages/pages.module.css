@@ -83,16 +83,6 @@
   color: var(--on-accent);
 }
 
-.primaryButton:hover {
-  background: var(--accent-strong);
-}
-
-.secondaryButton:hover,
-.textButton:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .dangerButton {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
   color: var(--danger);
@@ -268,8 +258,6 @@
   background: var(--surface-muted);
 }
 
-.field input:hover,
-.field select:hover,
 .field input:focus,
 .field select:focus {
   border-color: var(--accent);
@@ -477,10 +465,6 @@
   text-underline-offset: 4px;
 }
 
-.taskTitle:hover {
-  color: var(--accent);
-}
-
 .taskMain p {
   margin: 5px 0 0;
   color: var(--ink-muted);
@@ -652,11 +636,16 @@
 .sourceIntro {
   margin-bottom: 24px;
   padding: 16px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
   border-radius: var(--radius-control);
+  background: var(--line);
+  overflow: hidden;
+}
+
+.sourceIntro > div {
+  padding: 12px 14px;
   background: var(--surface-muted);
 }
 
@@ -670,11 +659,9 @@
   font-size: 12px;
 }
 
-.sourceIntro p {
-  margin: 0;
-  color: var(--warning);
-  font-size: 12px;
-  font-weight: 600;
+.sourceIntro strong {
+  margin-top: 3px;
+  font: 600 18px/1.4 var(--font-mono);
 }
 
 .sourceList {
@@ -685,68 +672,36 @@
   border-bottom: 1px solid var(--line);
 }
 
-.sourceHospital > summary {
-  min-height: 72px;
+.sourceHospitalHeader {
+  min-height: 76px;
   padding: 14px 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 18px;
-  cursor: pointer;
-  list-style-position: inside;
+  border-bottom: 1px solid var(--line);
 }
 
-.sourceHospital > summary:hover {
-  color: var(--accent);
-}
-
-.sourceHospital > summary > span:first-of-type {
-  min-width: 0;
-  flex: 1;
-}
-
-.sourceHospital > summary strong,
-.sourceHospital > summary small {
-  display: block;
-}
-
-.sourceHospital > summary strong {
+.sourceHospitalHeader h2 {
+  margin: 0;
   font: 600 18px/1.45 var(--font-display);
 }
 
-.sourceHospital > summary small {
+.sourceHospitalHeader small {
+  display: block;
   margin-top: 2px;
   color: var(--ink-muted);
   font-size: 12px;
 }
 
-.sourceHospital[open] > summary {
-  border-bottom: 1px solid var(--line);
-}
-
-.sourceHospital .sourceRow {
-  padding-left: 20px;
-}
-
 .sourceRow {
   min-height: 136px;
-  padding: 22px 0;
+  padding: 22px 0 22px 20px;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  align-items: start;
+  gap: 24px;
   border-bottom: 1px solid var(--line);
-}
-
-.sourceLevel {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--accent);
-  border-radius: 50%;
-  color: var(--accent);
-  font: 600 18px/1 var(--font-mono);
 }
 
 .sourceMain h2 {
@@ -754,23 +709,65 @@
   font: 600 18px/1.45 var(--font-display);
 }
 
-.sourceMain strong {
+.sourceMain > strong {
   display: block;
   margin-top: 5px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: 13px;
 }
 
-.sourceMain p {
+.sourceTechnicalDetails,
+.sourceSystemDetails {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sourceTechnicalDetails summary,
+.sourceSystemDetails summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sourceTechnicalDetails p,
+.sourceSystemDetails p {
   margin: 4px 0 0;
   color: var(--ink-muted);
   font-size: 13px;
 }
 
-.adapterKey {
-  display: block;
-  margin-top: 7px;
+.sourceTechnicalDetails dl,
+.sourceSystemDetails dl {
+  margin: 10px 0 4px;
+  display: grid;
+  gap: 8px;
+}
+
+.sourceTechnicalDetails dl > div,
+.sourceSystemDetails dl > div {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sourceTechnicalDetails dt,
+.sourceSystemDetails dt {
   color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.sourceTechnicalDetails dd,
+.sourceSystemDetails dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.sourceTechnicalDetails code,
+.sourceSystemDetails code {
   font: 11px/1.5 var(--font-mono);
   overflow-wrap: anywhere;
 }
@@ -778,10 +775,24 @@
 .sourceStatusGroup {
   justify-self: end;
   display: flex;
-  max-width: 280px;
+  width: 100%;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
+}
+
+.probeAction {
+  width: 100%;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.probeAction p {
+  margin: 0 0 8px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: right;
 }
 
 .probeResult,
@@ -798,6 +809,28 @@
 
 .probeError {
   color: var(--danger);
+}
+
+.directorySection {
+  margin-top: 24px;
+}
+
+.directorySection > .sourceList {
+  margin-top: 16px;
+}
+
+.sourceSystemDetails {
+  margin-top: 28px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sourceSystemDetails > div {
+  padding: 4px 0 18px;
+}
+
+.sourceSystemDetails h2 {
+  margin: 0;
+  font: 600 18px/1.45 var(--font-display);
 }
 
 .statusDanger {
@@ -915,8 +948,25 @@
   font-variant-numeric: tabular-nums;
 }
 
-.rulePolicy {
-  margin: 20px 0 0;
+.ruleSupplement {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--line));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
+}
+
+.ruleSupplement strong,
+.ruleSupplement small {
+  display: block;
+}
+
+.ruleSupplement p {
+  margin: 4px 0;
+}
+
+.ruleSupplement small {
+  color: var(--ink-muted);
 }
 
 .calendarDisclaimer {
@@ -1005,6 +1055,27 @@
   }
 }
 
+@media (hover: hover) {
+  .primaryButton:hover {
+    background: var(--accent-strong);
+  }
+
+  .secondaryButton:hover,
+  .textButton:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .field input:hover,
+  .field select:hover {
+    border-color: var(--accent);
+  }
+
+  .taskTitle:hover {
+    color: var(--accent);
+  }
+}
+
 @media (max-width: 759px) {
   .formGrid,
   .definitionGrid {
@@ -1027,10 +1098,13 @@
   }
 
   .setupSummaryGood,
-  .setupSummaryWarning,
-  .sourceIntro {
+  .setupSummaryWarning {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .sourceIntro {
+    grid-template-columns: 1fr;
   }
 
   .settingsRow {
@@ -1051,31 +1125,31 @@
     flex-wrap: wrap;
   }
 
-  .sourceHospital > summary {
-    align-items: flex-start;
-  }
-
-  .sourceHospital .sourceRow {
-    padding-left: 0;
+  .sourceHospitalHeader {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .sourceRow {
-    grid-template-columns: 44px 1fr;
+    padding-left: 0;
+    grid-template-columns: 1fr;
   }
 
-  .sourceRow > span,
   .sourceStatusGroup {
-    grid-column: 2;
     justify-self: start;
-  }
-
-  .sourceStatusGroup {
     align-items: flex-start;
   }
 
+  .probeAction p,
   .probeResult,
   .probeError {
     text-align: left;
+  }
+
+  .sourceTechnicalDetails dl > div,
+  .sourceSystemDetails dl > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 
   .notificationRow {
@@ -1091,9 +1165,25 @@
     flex-direction: column;
   }
 
-  .ruleFacts,
+  .ruleFacts {
+    grid-template-columns: 1fr;
+  }
+
   .calendarStrip {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
+  }
+
+  .calendarStrip li {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .calendarStrip span,
+  .calendarStrip small {
+    margin-top: 0;
   }
 
   .taskRow {

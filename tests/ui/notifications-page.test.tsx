@@ -67,7 +67,7 @@ describe('通知记录', () => {
     expect(screen.getByText('北京协和医院 · 东单院区 · 皮肤科')).toBeInTheDocument();
     expect(screen.getByText('送达状态未知')).toBeInTheDocument();
     expect(screen.getByText('不会自动重复发送，请先检查接收端。')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '前往官方渠道核验（新标签页打开）' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '打开官方说明核验（新标签页打开）' })).toHaveAttribute(
       'href',
       batch.officialEntryUrl,
     );
