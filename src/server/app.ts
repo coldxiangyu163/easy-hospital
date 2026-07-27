@@ -80,6 +80,14 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const CLIENT_HEADER = 'x-easy-hospital-client';
 const CLIENT_HEADER_VALUE = 'web';
 
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function requestHostname(hostHeader: string | undefined): string | undefined {
   if (!hostHeader) return undefined;
 
@@ -189,6 +197,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return reply.send(error);
   });
   const database = openDatabase(options.databasePath);
+  const catalogSnapshot = deepFreeze(readCatalog(database));
   const now = options.now ?? Date.now;
   const enforceSourceRateLimit =
     options.enforceSourceRateLimit ?? process.env.NODE_ENV !== 'test';
@@ -502,7 +511,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return result;
   });
 
-  app.get('/api/catalog', async () => readCatalog(database));
+  app.get('/api/catalog', async () => catalogSnapshot);
 
   app.post('/api/release-rules', async (request, reply) => {
     const parsed = releaseRuleInputSchema.safeParse(request.body);

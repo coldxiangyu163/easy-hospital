@@ -292,6 +292,29 @@ describe('GET /api/catalog', () => {
     ).toBe(true);
   });
 
+  it('buildApp 初始化后固定 catalog 快照，后续请求不再读取数据库且响应互不污染', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-catalog-snapshot-'));
+    const databasePath = join(directory, 'data.sqlite3');
+    app = await buildApp({ databasePath });
+    const headers = { host: '127.0.0.1' };
+
+    const first = await app.inject({ method: 'GET', url: '/api/catalog', headers });
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json();
+    expect(firstBody.hospitals[0].name).toBe('北京协和医院');
+    firstBody.hospitals[0].name = '调用方本地篡改';
+
+    const database = openDatabase(databasePath);
+    database
+      .prepare("UPDATE hospital SET name = '请求期间数据库改动' WHERE id = 'hospital-pumch'")
+      .run();
+    database.close();
+
+    const second = await app.inject({ method: 'GET', url: '/api/catalog', headers });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().hospitals[0].name).toBe('北京协和医院');
+  });
+
   it('目录顺序不受名称编辑影响，inactive 历史目标仍可解析但不能创建任务', async () => {
     directory = await mkdtemp(join(tmpdir(), 'easy-hospital-catalog-order-'));
     const databasePath = join(directory, 'data.sqlite3');

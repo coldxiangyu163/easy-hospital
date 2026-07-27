@@ -23,18 +23,129 @@ export class AnzhenScheduleParseError extends Error {
   }
 }
 
+const MAX_EXTRACTED_TEXT_LENGTH = 64 * 1024;
+const namedEntities: Readonly<Record<string, string>> = {
+  nbsp: ' ',
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function assertTextCodePoint(codePoint: number): void {
+  const validWhitespace = codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d;
+  const controlCharacter =
+    (codePoint >= 0 && codePoint < 0x20 && !validWhitespace) ||
+    (codePoint >= 0x7f && codePoint <= 0x9f);
+  const surrogate = codePoint >= 0xd800 && codePoint <= 0xdfff;
+  const nonCharacter =
+    (codePoint >= 0xfdd0 && codePoint <= 0xfdef) ||
+    (codePoint & 0xffff) === 0xfffe ||
+    (codePoint & 0xffff) === 0xffff;
+  if (
+    !Number.isInteger(codePoint) ||
+    codePoint < 0 ||
+    codePoint > 0x10ffff ||
+    controlCharacter ||
+    surrogate ||
+    nonCharacter
+  ) {
+    throw new AnzhenScheduleParseError('HTML entity 包含非法字符');
+  }
+}
+
+function appendText(parts: string[], value: string, length: number): number {
+  const nextLength = length + value.length;
+  if (nextLength > MAX_EXTRACTED_TEXT_LENGTH) {
+    throw new AnzhenScheduleParseError('HTML 文本长度超出限制');
+  }
+  parts.push(value);
+  return nextLength;
+}
+
+function extractTextWithoutTags(html: string): string {
+  const parts: string[] = [];
+  let length = 0;
+  let index = 0;
+  while (index < html.length) {
+    if (html[index] !== '<') {
+      length = appendText(parts, html[index]!, length);
+      index += 1;
+      continue;
+    }
+
+    if (html.startsWith('<!--', index)) {
+      const commentEnd = html.indexOf('-->', index + 4);
+      if (commentEnd === -1) {
+        throw new AnzhenScheduleParseError('HTML 注释未闭合');
+      }
+      index = commentEnd + 3;
+      continue;
+    }
+
+    let quote: '"' | "'" | undefined;
+    let closed = false;
+    index += 1;
+    while (index < html.length) {
+      const character = html[index]!;
+      if (quote !== undefined) {
+        if (character === quote) quote = undefined;
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '>') {
+        closed = true;
+        index += 1;
+        break;
+      }
+      index += 1;
+    }
+    if (!closed || quote !== undefined) {
+      throw new AnzhenScheduleParseError('HTML 标签未闭合');
+    }
+  }
+  return parts.join('');
+}
+
+function decodeEntitiesOnce(text: string): string {
+  const parts: string[] = [];
+  let length = 0;
+  let index = 0;
+  while (index < text.length) {
+    if (text[index] !== '&') {
+      length = appendText(parts, text[index]!, length);
+      index += 1;
+      continue;
+    }
+
+    const semicolon = text.indexOf(';', index + 1);
+    if (semicolon === -1 || semicolon - index > 16) {
+      length = appendText(parts, '&', length);
+      index += 1;
+      continue;
+    }
+    const entity = text.slice(index + 1, semicolon);
+    let decoded = namedEntities[entity.toLowerCase()];
+    const decimal = entity.match(/^#([0-9]+)$/);
+    const hexadecimal = entity.match(/^#x([0-9a-f]+)$/i);
+    if (decimal || hexadecimal) {
+      const codePoint = Number.parseInt((decimal ?? hexadecimal)![1]!, decimal ? 10 : 16);
+      assertTextCodePoint(codePoint);
+      decoded = String.fromCodePoint(codePoint);
+    }
+    if (decoded === undefined) {
+      length = appendText(parts, '&', length);
+      index += 1;
+      continue;
+    }
+    length = appendText(parts, decoded, length);
+    index = semicolon + 1;
+  }
+  return parts.join('');
+}
+
 const decodeText = (html: string): string =>
-  html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;|&#160;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/\s+/g, ' ')
-    .trim();
+  decodeEntitiesOnce(extractTextWithoutTags(html)).replace(/\s+/g, ' ').trim();
 
 const classNames = (attributes: string): string[] => {
   const match = attributes.match(/\bclass\s*=\s*(["'])(.*?)\1/i);

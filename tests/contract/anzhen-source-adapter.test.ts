@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { parseAnzhenHeartCenterSchedule } from '../../src/adapters/sources/anzhen-schedule.js';
 import {
   ANZHEN_HEART_CENTER_URL,
   createAnzhenHeartCenterScheduleAdapter,
@@ -83,6 +84,43 @@ describe('AnzhenHeartCenterScheduleAdapter contract', () => {
       }),
     ]);
     expect(result.observations.some(({ doctorName }) => doctorName === '跨院医生')).toBe(false);
+  });
+
+  it('HTML 文本只解码一层 entity，双重编码不能变成标签', async () => {
+    const html = (await readFile(fileURLToPath(fixtureUrl), 'utf8')).replace(
+      '冠心病中心一区门诊(朝阳)',
+      '冠心病中心&amp;lt;script&gt;一区门诊(朝阳)',
+    );
+
+    const schedule = parseAnzhenHeartCenterSchedule(html);
+    const clinicName = schedule.slots.find(
+      ({ department }) => department === 'coronary-heart-disease-center',
+    )?.clinicName;
+    expect(clinicName).toContain('&lt;script>');
+    expect(clinicName).not.toContain('<script>');
+  });
+
+  it('HTML 文本提取正确跳过属性引号内含 > 的完整标签', async () => {
+    const html = (await readFile(fileURLToPath(fixtureUrl), 'utf8')).replace(
+      '冠心病中心一区门诊(朝阳)',
+      '冠心病中心<span title="a > b"></span>一区门诊(朝阳)',
+    );
+
+    const schedule = parseAnzhenHeartCenterSchedule(html);
+    expect(
+      schedule.slots.find(
+        ({ department }) => department === 'coronary-heart-disease-center',
+      )?.clinicName,
+    ).toBe('冠心病中心一区门诊(朝阳)');
+  });
+
+  it('HTML 文本提取遇到未闭合标签时 fail closed', async () => {
+    const html = (await readFile(fileURLToPath(fixtureUrl), 'utf8')).replace(
+      '星期日</td>',
+      '星期日<span title="broken</td>',
+    );
+
+    expect(() => parseAnzhenHeartCenterSchedule(html)).toThrow('HTML 标签未闭合');
   });
 
   it('同一官方页按 manifest binding 隔离心律失常中心、日期、时段和职称', async () => {
