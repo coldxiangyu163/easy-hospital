@@ -56,65 +56,124 @@ test('创建关注并浏览规则、来源与本机设置，无 pageerror 和真
   });
 
   await page.goto('/');
+  const banner = page.getByRole('banner');
+  await expect(banner.getByText('仅本机访问', { exact: true })).toBeVisible();
+  await expect(banner.getByRole('status')).toHaveText('运行正常');
   await expect(page.getByRole('heading', { name: '下一步：创建第一件关注' })).toBeVisible();
   await page.screenshot({ path: screenshotPath('now-empty-1280.png'), fullPage: true });
 
-  await page.getByRole('link', { name: '创建关注任务' }).click();
+  await page.getByRole('link', { name: '创建关注任务', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新增一件关注' })).toBeVisible();
-  await expect(page.getByLabel('医院').locator('option')).toHaveCount(11);
-  await page.getByLabel('医院').selectOption('hospital-jishuitan');
-  await expect(page.getByText('仅目录，待可靠公开来源')).toBeVisible();
-  await expect(page.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
-  await expect(page.getByRole('link', { name: /打开北京积水潭医院官网.*新标签页打开/ }))
-    .toHaveAttribute('href', 'https://www.jst-hosp.com.cn/');
-  await page.getByLabel('医院').selectOption('hospital-pumch');
-  await page.getByLabel('开始日期').fill(futureDate(1));
-  await page.getByLabel('结束日期').fill(futureDate(7));
-  await page.getByLabel('时段').selectOption('AM');
-  await page.getByRole('button', { name: '创建并开始关注' }).click();
+  for (const groupName of ['关注对象', '匹配条件', '目标就诊日期与时段']) {
+    await expect(page.getByRole('group', { name: groupName, exact: true })).toBeVisible();
+  }
+  const reminderContract = page.getByRole('region', {
+    name: '这项提醒会怎样工作',
+    exact: true,
+  });
+  await expect(reminderContract).toBeVisible();
+  await expect(reminderContract).toContainText('首次检查只建立 baseline，不会补发已有排班');
+
+  const hospitalSelect = page.getByRole('combobox', { name: '医院', exact: true });
+  await expect(hospitalSelect.getByRole('option')).toHaveCount(11);
+  await hospitalSelect.selectOption('hospital-jishuitan');
+  await expect(page.getByText('暂不支持提醒', { exact: true })).toBeVisible();
+  await expect(reminderContract).toContainText('当前不会开始检查或发送提醒');
+  await expect(page.getByRole('button', { name: '创建并开始关注', exact: true })).toBeDisabled();
+  await expect(page.getByRole('link', {
+    name: '打开北京积水潭医院官网（不是预约入口 ，新标签页打开 ）',
+    exact: true,
+  })).toHaveAttribute('href', 'https://www.jst-hosp.com.cn/');
+
+  await hospitalSelect.selectOption('hospital-pumch');
+  await page.getByRole('textbox', { name: '开始日期', exact: true }).fill(futureDate(1));
+  await page.getByRole('textbox', { name: '结束日期', exact: true }).fill(futureDate(7));
+  await page.getByRole('combobox', { name: '时段', exact: true }).selectOption('AM');
+  await page.getByRole('button', { name: '创建并开始关注', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: '北京协和医院 · 东单院区 · 皮肤科' }),
+    page.getByRole('heading', { name: '北京协和医院 · 东单院区 · 皮肤科', exact: true }),
   ).toBeVisible();
 
   await page.getByRole('link', { name: '关注任务', exact: true }).click();
   await expect(page.getByRole('heading', { name: '你正在关注的事' })).toBeVisible();
 
   await page.getByRole('link', { name: '规则与日历', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /什么时候值得看|还没有与 catalog target 精确匹配的规则/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '什么时候值得看', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', {
+    name: '查看医院规则说明 （新标签页打开）',
+    exact: true,
+  })).toBeVisible();
+  const ruleSupplements = page.getByRole('region', { name: '医院说明补充', exact: true });
+  for (let index = 0; index < await ruleSupplements.count(); index += 1) {
+    await expect(ruleSupplements.nth(index)).toContainText('本产品未据此安排提醒');
+  }
   await page.screenshot({ path: screenshotPath('rules-1280.png'), fullPage: true });
 
   await page.getByRole('link', { name: '数据来源', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '11 家医院，逐个 target 说明能力' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^\d+ 个科室可创建提醒$/ })).toBeVisible();
+  const sourceSummary = page.getByRole('region', { name: '来源能力数量', exact: true });
+  await expect(sourceSummary.getByText('可创建提醒', { exact: true })).toBeVisible();
+  const jishuitanDirectoryTarget = page.getByRole('heading', {
+    name: '北京积水潭医院 · 新街口 · 创伤骨科',
+    exact: true,
+  });
+  await expect(jishuitanDirectoryTarget).toHaveCount(0);
+  const showDirectoryTargets = page.getByRole('button', {
+    name: /^显示其余 \d+ 个目录目标$/,
+  });
+  await expect(showDirectoryTargets).toHaveAttribute('aria-expanded', 'false');
+  await showDirectoryTargets.click();
+  await expect(page.getByRole('button', {
+    name: '收起其余目录目标',
+    exact: true,
+  })).toHaveAttribute('aria-expanded', 'true');
+  await expect(jishuitanDirectoryTarget).toBeVisible();
+  const jishuitanDirectoryRow = page.getByRole('article').filter({
+    has: jishuitanDirectoryTarget,
+  });
+  await expect(jishuitanDirectoryRow.getByText('暂不支持提醒', { exact: true })).toBeVisible();
+
   const pumchProbe = page.getByRole('button', {
-    name: '自检 北京协和医院 东单院区 皮肤科 公开来源',
+    name: '立即检查并记录北京协和医院东单院区皮肤科的新变化',
+    exact: true,
   });
   await expect(pumchProbe).toBeVisible();
-  await expect(pumchProbe).toHaveText('运行公开来源自检');
-  // 只确认正式 adapter manifest 已装配，不点击来源自检，避免测试主动发起外站读取。
+  await expect(pumchProbe).toHaveText('立即检查并记录新变化');
+  // 只确认正式 adapter manifest 已装配，不点击来源检查，避免测试主动发起外站读取。
   await page.screenshot({ path: screenshotPath('sources-1280.png'), fullPage: true });
 
   await page.getByRole('link', { name: '本机设置', exact: true }).click();
   await expect(
     page.getByRole('heading', { name: '先确认这台电脑已经准备好' }),
   ).toBeVisible();
+  await expect(page.getByRole('button', { name: /^发送 .+ 测试通知$/ })).toHaveCount(0);
+  const recheckRegion = page.getByRole('region', { name: '重新检查本机状态', exact: true });
+  await recheckRegion.getByRole('button', { name: '重新检查', exact: true }).click();
+  await expect(recheckRegion.getByRole('status', { name: /^检查完成：.+（北京时间）$/ }))
+    .toBeVisible();
   await page.screenshot({ path: screenshotPath('settings-1280.png'), fullPage: true });
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.getByRole('link', { name: '现在', exact: true }).click();
   await expect(page.getByRole('heading', { name: '下一步：核对最近规则' })).toBeVisible();
+  const navigation = page.getByRole('navigation', { name: '主要导航，六个入口', exact: true });
+  const navigationLabels = ['现在', '关注任务', '规则与日历', '通知记录', '数据来源', '本机设置'];
+  await expect(navigation.getByRole('link')).toHaveCount(navigationLabels.length);
+  for (const label of navigationLabels) {
+    const link = navigation.getByRole('link', { name: label, exact: true });
+    await expect(link).toBeVisible();
+    const box = await link.boundingBox();
+    if (!box) throw new Error(`${label} 导航入口没有可见边界`);
+    expect(box.x, `${label} 导航入口应位于 375px 视口内`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${label} 导航入口应位于 375px 视口内`).toBeLessThanOrEqual(375);
+  }
+  const pageWidths = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+  }));
+  expect(Math.max(pageWidths.document, pageWidths.body)).toBeLessThanOrEqual(pageWidths.viewport);
   await page.screenshot({ path: screenshotPath('now-with-task-375.png'), fullPage: true });
-
-  await page.getByRole('link', { name: '关注任务', exact: true }).click();
-  await page.getByRole('link', { name: '新增关注' }).click();
-  const hospitalSelect = page.getByRole('combobox', { name: '医院', exact: true });
-  const campusSelect = page.getByRole('combobox', { name: '院区', exact: true });
-  const departmentSelect = page.getByRole('combobox', { name: '科室', exact: true });
-  await hospitalSelect.selectOption('hospital-cicams');
-  await expect(hospitalSelect).toHaveValue('hospital-cicams');
-  await expect(campusSelect).toHaveValue('campus-cicams-beijing');
-  await expect(departmentSelect).toHaveValue('department-cicams-thoracic-surgery');
-  await expect(page.getByRole('button', { name: '创建并开始关注' })).toBeDisabled();
-  await page.screenshot({ path: screenshotPath('catalog-directory-375.png'), fullPage: true });
 
   expect(pageErrors).toEqual([]);
   expect(externalRequests).toEqual([]);
