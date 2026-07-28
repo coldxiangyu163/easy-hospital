@@ -6,6 +6,7 @@
 
 ### 安全
 
+- 开发工具链升级至 `concurrently@10.0.4`，锁定 `shell-quote@1.9.0`，修复 `CVE-2026-13311` 的解析复杂度拒绝服务问题。
 - 生产依赖审计仅临时豁免 `GHSA-qwww-vcr4-c8h2`：当前仅使用 `react-router-dom` 客户端 SPA API，不存在 RSC/Server Actions 受影响路径；待 `react-router-dom` 兼容 8.3.0+ 后立即移除豁免。
 
 ### 目录与来源能力
