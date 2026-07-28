@@ -105,7 +105,8 @@ test('创建关注并浏览规则、来源与本机设置，无 pageerror 和真
   })).toBeVisible();
   const ruleSupplements = page.getByRole('region', { name: '医院说明补充', exact: true });
   for (let index = 0; index < await ruleSupplements.count(); index += 1) {
-    await expect(ruleSupplements.nth(index)).toContainText('本产品未据此安排提醒');
+    await expect(ruleSupplements.nth(index)).toContainText('未据此推算常规放号');
+    await expect(ruleSupplements.nth(index)).toContainText('实际提醒按任务设置提前发送');
   }
   await page.screenshot({ path: screenshotPath('rules-1280.png'), fullPage: true });
 
@@ -119,12 +120,12 @@ test('创建关注并浏览规则、来源与本机设置，无 pageerror 和真
   });
   await expect(jishuitanDirectoryTarget).toHaveCount(0);
   const showDirectoryTargets = page.getByRole('button', {
-    name: /^显示其余 \d+ 个目录目标$/,
+    name: /^显示其余 \d+ 个目录或暂不可用目标$/,
   });
   await expect(showDirectoryTargets).toHaveAttribute('aria-expanded', 'false');
   await showDirectoryTargets.click();
   await expect(page.getByRole('button', {
-    name: '收起其余目录目标',
+    name: '收起目录或暂不可用目标',
     exact: true,
   })).toHaveAttribute('aria-expanded', 'true');
   await expect(jishuitanDirectoryTarget).toBeVisible();
@@ -286,7 +287,7 @@ test('rules-only 任务显示规则提醒语义，public-source 任务保持排�
   });
   await page.goto('/tasks');
   const aRow = page.locator('article').filter({ hasText: '北京协和医院' });
-  await expect(aRow.getByText('公开排班关注已启用')).toBeVisible();
+  await expect(aRow.getByText('公开来源支持已启用')).toBeVisible();
 
   await page.goto('/');
   await expect(
