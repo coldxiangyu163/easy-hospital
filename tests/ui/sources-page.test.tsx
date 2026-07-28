@@ -194,6 +194,9 @@ describe('数据来源', () => {
     const anzhenArrhythmia = screen.getByRole('heading', { name: '北京安贞医院 · 朝阳院区 · 心律失常中心' }).closest('article')!;
     expect(within(anzhenCoronary).getByText('实验支持')).toBeInTheDocument();
     expect(within(anzhenArrhythmia).getByText('实验支持')).toBeInTheDocument();
+    expect(within(anzhenCoronary).getByText('已装配，尚无检查记录').className).toContain('statusWarning');
+    expect(within(anzhenArrhythmia).getByText('已装配，尚无检查记录')).toBeInTheDocument();
+    expect(within(anzhenCoronary).queryByText('公开来源正在运行')).not.toBeInTheDocument();
     expect(within(anzhenCoronary).getByText('source-anzhen-public-heart-center-schedule').closest('details')).not.toHaveAttribute('open');
 
     expect(screen.queryByRole('heading', { name: '北京大学人民医院 · 西直门 · 血液科' })).not.toBeInTheDocument();
@@ -213,6 +216,92 @@ describe('数据来源', () => {
     expect(screen.getAllByText(/会访问医院公开网络，结果可能写入事件和通知记录；失败不代表无号/)).not.toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: '立即检查并记录北京协和医院东单院区皮肤科的新变化' }));
     expect(await screen.findByText('检查已完成；此次未发现新的公开排班记录。')).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      lastStatus: 'PARTIAL',
+      statusText: '仅完成部分检查',
+      detailText: /仅完成部分检查；上次成功：2026年7月27日 16:00/,
+      statusClass: 'statusWarning',
+      detailClass: 'probeError',
+    },
+    {
+      lastStatus: 'OK',
+      statusText: '最近检查成功',
+      detailText: /最近检查成功；上次成功：2026年7月27日 16:00/,
+      statusClass: 'statusGood',
+      detailClass: 'probeResult',
+    },
+  ])('$lastStatus 如实显示检查结果并保留上次成功时间', async ({
+    lastStatus,
+    statusText,
+    detailText,
+    statusClass,
+    detailClass,
+  }) => {
+    const runtimeCapability = {
+      ...capabilities[1],
+      runtime: {
+        lastAttemptAt: '2026-07-27T08:10:00.000Z',
+        lastSuccessAt: '2026-07-27T08:00:00.000Z',
+        lastStatus,
+        lastErrorCode: lastStatus === 'PARTIAL' ? 'SOURCE_PARTIAL' : null,
+      },
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/catalog') return jsonResponse({ hospitals: [catalog.hospitals[0]] });
+      if (path === '/api/health') return jsonResponse({ status: 'healthy', checks: {} });
+      if (path === '/api/source-adapters') return jsonResponse({ adapters: [runtimeCapability] });
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/sources']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const row = (await screen.findByRole('heading', {
+      name: '北京协和医院 · 东单院区 · 皮肤科',
+    })).closest('article')!;
+    expect(within(row).getByText(statusText).className).toContain(statusClass);
+    expect(within(row).getByText(detailText).className).toContain(detailClass);
+  });
+
+  it('禁用公开来源且缺少 rules-only capability 时不计入当前可创建数量', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/catalog') {
+        return jsonResponse({ hospitals: [catalog.hospitals[0], catalog.hospitals[1]] });
+      }
+      if (path === '/api/health') return jsonResponse({ status: 'healthy', checks: {} });
+      if (path === '/api/source-adapters') {
+        return jsonResponse({ adapters: [{ ...capabilities[1], enabled: false }] });
+      }
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/sources']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('heading', { name: '0 个科室可创建提醒' })).toBeInTheDocument();
+    expect(screen.getByText('可创建提醒').nextElementSibling).toHaveTextContent('0');
+    fireEvent.click(screen.getByRole('button', { name: '显示其余 2 个目录目标' }));
+    const publicRow = screen.getByRole('heading', {
+      name: '北京协和医院 · 东单院区 · 皮肤科',
+    }).closest('article')!;
+    const rulesRow = screen.getByRole('heading', {
+      name: '北京同仁医院 · 崇文门院区 · 鼻科',
+    }).closest('article')!;
+    expect(within(publicRow).getByText('本次运行未启用')).toBeInTheDocument();
+    expect(within(rulesRow).getByText('本次运行未启用')).toBeInTheDocument();
   });
 
   it('来源限流时展示等待时间，不把 429 当作未知来源结果', async () => {

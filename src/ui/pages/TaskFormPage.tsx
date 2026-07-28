@@ -10,6 +10,7 @@ import {
   type WatchTaskInput,
 } from '../api.js';
 import {
+  canCreateWatchTaskNow,
   officialHospitalUrl,
   resolveCatalogTarget,
   sourceBindingForTarget,
@@ -52,6 +53,13 @@ function addDateDays(dateKey: string, days: number): string {
 
 function parseTitles(value: string): string[] {
   return value.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function validateTitles(value: string): FieldErrorUpdates {
+  const count = parseTitles(value).length;
+  if (count === 0) return { titles: '请至少填写一个职称。' };
+  if (count > 10) return { titles: '职称最多填写 10 项。' };
+  return {};
 }
 
 function validateDates(
@@ -128,7 +136,7 @@ export function TaskFormPage() {
     Promise.all([
       api.catalog(controller.signal),
       taskId ? api.task(taskId, controller.signal) : Promise.resolve(null),
-      // runtime-status 失败时仍可按 catalog 的 fail-closed 能力浏览和创建基础任务。
+      // runtime-status 失败时仍可浏览 catalog，但当前创建能力按空 capability fail closed。
       api.runtimeStatus(controller.signal).catch(() => null),
     ]).then(
       ([catalog, task, runtime]) => {
@@ -191,13 +199,22 @@ export function TaskFormPage() {
     ? sourceCapabilityForTarget(selectedTarget, sourceCapabilities)
     : undefined;
   const policy = supportPresentation(selectedDepartment?.support, selectedSource);
+  const canCreateWatchTask = selectedTarget
+    ? canCreateWatchTaskNow(selectedTarget, sourceCapabilities)
+    : false;
+  // 运行时 capability 只决定当前是否可新建；既有任务仍可打开和编辑，保存时由服务端复核。
+  const canUseTaskForm = editing || canCreateWatchTask;
   const ruleOnly = policy.ruleOnly;
   const disabledReason =
     selectedDepartment?.support.active === false
       ? '当前不能创建提醒：这个科室的关注能力已经停用。'
       : selectedDepartment?.support.supportMode === 'directory-only'
-        ? '当前不能创建提醒：这个科室还没有可可靠检查的公开排班或已确认规则。'
-        : '当前不能创建提醒：现在无法确认这个科室可以可靠提供提醒。';
+        ? '当前不能创建提醒：这个科室还没有可以可靠检查的公开排班或已确认规则。'
+        : selectedDepartment?.support.supportMode === 'public-source'
+          ? '当前不能创建提醒：本次运行没有为这个科室启用精确匹配的公开来源。'
+          : selectedDepartment?.support.supportMode === 'rules-only'
+            ? '当前不能创建提醒：本次运行没有这个科室的已启用放号规则。'
+            : '当前不能创建提醒：现在无法确认这个科室可以可靠提供提醒。';
   const officialUrl = selectedTarget
     ? sourceBindingForTarget(selectedTarget, selectedSource)?.officialEntryUrl ??
       officialHospitalUrl(selectedTarget.hospital)
@@ -230,9 +247,7 @@ export function TaskFormPage() {
     if (nextMatchMode === 'doctor' && !doctorName.trim()) {
       nextErrors.doctorName = '请填写医生姓名。';
     }
-    if (nextMatchMode === 'title' && parseTitles(titles).length === 0) {
-      nextErrors.titles = '请至少填写一个职称。';
-    }
+    if (nextMatchMode === 'title') Object.assign(nextErrors, validateTitles(titles));
     setErrors((current) => replaceFieldErrors(
       current,
       ['doctorName', 'titles'],
@@ -269,12 +284,12 @@ export function TaskFormPage() {
     event.preventDefault();
     setValidationActive(true);
     const nextErrors: FormErrors = {};
-    if (!policy.canCreateWatchTask) {
-      nextErrors.form = '这个 target 当前只有目录信息或已停用，不能创建或恢复关注任务。';
+    if (!canUseTaskForm) {
+      nextErrors.form = '这个 target 当前没有已启用的精确来源或规则能力，不能创建关注任务。';
     }
     Object.assign(nextErrors, validateDates(dateFrom, dateTo, earliestDate, latestDate));
     if (!ruleOnly && matchMode === 'doctor' && !doctorName.trim()) nextErrors.doctorName = '请填写医生姓名。';
-    if (!ruleOnly && matchMode === 'title' && titleOptions.length === 0) nextErrors.titles = '请至少填写一个职称。';
+    if (!ruleOnly && matchMode === 'title') Object.assign(nextErrors, validateTitles(titles));
     if (!hospitalId || !campusId || !departmentId) nextErrors.form = '当前可关注范围不完整，请重新选择。';
     if (Object.keys(nextErrors).length > 0) {
       nextErrors.form ??= fieldValidationSummary;
@@ -308,6 +323,10 @@ export function TaskFormPage() {
         message = '任务已在其他页面更新。当前填写内容仍在，请返回任务列表重新打开后再编辑。';
       } else if (error instanceof ApiError && error.code === 'SOURCE_POLICY_VIOLATION') {
         message = '这个 target 的支持级别已经变化，当前不能保存任务。请重新读取目录后确认。';
+      } else if (error instanceof ApiError && error.code === 'SOURCE_BINDING_NOT_AVAILABLE') {
+        message = '这个科室当前没有已启用且精确匹配的公开来源，任务未保存。请重新读取来源状态后确认。';
+      } else if (error instanceof ApiError && error.code === 'RELEASE_RULE_NOT_AVAILABLE') {
+        message = '这个科室当前没有已启用的放号规则，任务未保存。请重新读取规则状态后确认。';
       } else if (error instanceof ApiError && error.status === 400) {
         message = '填写内容未通过本机校验。当前内容已保留，请检查标出的字段后重试。';
       } else if (error instanceof ApiError && error.status === 404 && editing) {
@@ -385,9 +404,9 @@ export function TaskFormPage() {
           <section id="target-support-explanation" className={styles.policyNote} aria-label="所选医院和科室的提醒能力">
             <strong>{policy.title}</strong>
             <p>{policy.description}</p>
-            {ruleOnly ? (
+            {ruleOnly && canCreateWatchTask ? (
               <p>这项提醒按已确认的放号规则工作；医生、职称与时段不会参与判断。</p>
-            ) : policy.canCreateWatchTask ? (
+            ) : canCreateWatchTask ? (
               <p>这项提醒可以检查后来新发布的公开排班，但不能判断实时余号或退号。</p>
             ) : (
               <p>目前可以查看医院官网，但还不能为这个科室创建提醒。</p>
@@ -412,7 +431,7 @@ export function TaskFormPage() {
           </section>
         </fieldset>
 
-        {policy.canCreateWatchTask ? (
+        {canUseTaskForm ? (
           <>
             <fieldset className={styles.formSection}>
               <legend>匹配条件</legend>
@@ -438,7 +457,7 @@ export function TaskFormPage() {
                   {matchMode === 'title' ? (
                     <div className={styles.field}>
                       <label htmlFor="titles">职称</label>
-                      <input id="titles" value={titles} onChange={(event) => { const nextTitles = event.target.value; setTitles(nextTitles); updateFieldErrors(['titles'], parseTitles(nextTitles).length > 0 ? {} : { titles: '请至少填写一个职称。' }); }} placeholder="例如：主任医师，副主任医师" aria-invalid={Boolean(errors.titles)} aria-describedby={errors.titles ? 'titles-error' : undefined} />
+                      <input id="titles" value={titles} onChange={(event) => { const nextTitles = event.target.value; setTitles(nextTitles); updateFieldErrors(['titles'], validateTitles(nextTitles)); }} placeholder="例如：主任医师，副主任医师" aria-invalid={Boolean(errors.titles)} aria-describedby={errors.titles ? 'titles-error' : undefined} />
                       {errors.titles ? <p id="titles-error" className={styles.fieldError}>{errors.titles}</p> : null}
                     </div>
                   ) : null}
@@ -478,7 +497,7 @@ export function TaskFormPage() {
         <section id="reminder-contract" className={styles.contractSummary} aria-labelledby="reminder-contract-title">
           <h2 id="reminder-contract-title">这项提醒会怎样工作</h2>
           <ul>
-            {policy.canCreateWatchTask ? (
+            {canCreateWatchTask ? (
               <>
                 <li>你选择的日期是希望就诊的目标日期，不是提醒发送日期。</li>
                 {ruleOnly ? (
@@ -500,7 +519,7 @@ export function TaskFormPage() {
         <div className={styles.formFooter}>
           <div>
             <p>任务只保存关注条件，不保存身份证、医保卡、医院账号、Cookie 或 Token。</p>
-            {!policy.canCreateWatchTask ? (
+            {!canUseTaskForm ? (
               <p id="submit-disabled-reason" className={styles.disabledReason}>{disabledReason}</p>
             ) : null}
           </div>
@@ -509,8 +528,8 @@ export function TaskFormPage() {
             <button
               className={styles.primaryButton}
               type="submit"
-              disabled={submitting || !policy.canCreateWatchTask}
-              aria-describedby={`target-support-explanation reminder-contract${policy.canCreateWatchTask ? '' : ' submit-disabled-reason'}`}
+              disabled={submitting || !canUseTaskForm}
+              aria-describedby={`target-support-explanation reminder-contract${canUseTaskForm ? '' : ' submit-disabled-reason'}`}
             >
               {submitting ? (editing ? '正在保存…' : '正在创建…') : (editing ? '保存更改' : '创建并开始关注')}
             </button>

@@ -10,6 +10,7 @@ import {
   type SourceProbeResult,
 } from '../api.js';
 import {
+  canCreateWatchTaskNow,
   officialHospitalUrl,
   sourceBindingForTarget,
   sourceCapabilityForTarget,
@@ -35,14 +36,19 @@ const beijingTime = (value: string): string =>
     timeStyle: 'short',
   }).format(new Date(value));
 
-const sourceRuntimeMessage = (source: SourceCapability): { text: string; warning: boolean } => {
+const sourceRuntimeMessage = (
+  source: SourceCapability,
+): { text: string; warning: boolean } | undefined => {
   const runtime = source.runtime;
-  if (!runtime) return { text: '尚无检查记录', warning: false };
+  if (!runtime) return undefined;
   const lastSuccess = runtime.lastSuccessAt
     ? `上次成功：${beijingTime(runtime.lastSuccessAt)}`
     : '尚无成功记录';
-  if (runtime.lastStatus === 'OK' || runtime.lastStatus === 'PARTIAL') {
-    return { text: lastSuccess, warning: false };
+  if (runtime.lastStatus === 'OK') {
+    return { text: `最近检查成功；${lastSuccess}`, warning: false };
+  }
+  if (runtime.lastStatus === 'PARTIAL') {
+    return { text: `仅完成部分检查；${lastSuccess}`, warning: true };
   }
   if (runtime.lastStatus === 'RUNNING') {
     return { text: `正在检查；${lastSuccess}`, warning: false };
@@ -61,11 +67,32 @@ const probeMessage = (result: SourceProbeResult): string => {
   return '来源暂时失败；本次结果不可用，也不代表无号。';
 };
 
-function sourceStatus(target: CatalogTarget, source: SourceCapability | undefined): string {
-  if (target.department.support.supportMode === 'directory-only') return '待可靠公开来源';
-  if (!source?.enabled) return '本次运行未启用';
-  if (target.department.support.supportMode === 'rules-only') return '提醒规则可用';
-  return '公开来源正在运行';
+type SourceStatus = { text: string; tone: 'good' | 'warning' | 'muted' };
+
+function sourceStatus(
+  target: CatalogTarget,
+  source: SourceCapability | undefined,
+): SourceStatus {
+  if (target.department.support.supportMode === 'directory-only') {
+    return { text: '待可靠公开来源', tone: 'muted' };
+  }
+  if (!source?.enabled) return { text: '本次运行未启用', tone: 'warning' };
+  if (target.department.support.supportMode === 'rules-only') {
+    return { text: '提醒规则可用', tone: 'good' };
+  }
+  if (!source.runtime || source.runtime.lastStatus === null) {
+    return { text: '已装配，尚无检查记录', tone: 'warning' };
+  }
+  if (source.runtime.lastStatus === 'OK') {
+    return { text: '最近检查成功', tone: 'good' };
+  }
+  if (source.runtime.lastStatus === 'PARTIAL') {
+    return { text: '仅完成部分检查', tone: 'warning' };
+  }
+  if (source.runtime.lastStatus === 'RUNNING') {
+    return { text: '正在检查', tone: 'muted' };
+  }
+  return { text: '最近检查不可用', tone: 'warning' };
 }
 
 export function SourcesPage() {
@@ -136,7 +163,7 @@ export function SourcesPage() {
     ),
   );
   const isCreatable = (target: CatalogTarget) =>
-    target.department.support.active && target.department.support.canCreateWatchTask;
+    canCreateWatchTaskNow(target, state.adapters);
   const creatableTargets = targets.filter(isCreatable);
   const directoryTargets = targets.filter(
     (target) => target.department.support.supportMode === 'directory-only',
@@ -152,7 +179,7 @@ export function SourcesPage() {
     const binding = sourceBindingForTarget(target, source);
     const policy = supportPresentation(department.support, source);
     const probeState = source ? probeStates[source.key] : undefined;
-    const runtimeMessage = source ? sourceRuntimeMessage(source) : undefined;
+    const runtimeMessage = source?.enabled ? sourceRuntimeMessage(source) : undefined;
     const officialUrl = binding?.officialEntryUrl ?? officialHospitalUrl(hospital);
     const canProbe = Boolean(
       source?.enabled &&
@@ -191,7 +218,13 @@ export function SourcesPage() {
           </details>
         </div>
         <div className={styles.sourceStatusGroup}>
-          <span className={source?.enabled ? styles.statusGood : styles.statusWarning}>{status}</span>
+          <span className={
+            status.tone === 'good'
+              ? styles.statusGood
+              : status.tone === 'warning'
+                ? styles.statusWarning
+                : styles.statusMuted
+          }>{status.text}</span>
           {runtimeMessage && department.support.supportMode === 'public-source' ? (
             <p className={runtimeMessage.warning ? styles.probeError : styles.probeResult}>
               {runtimeMessage.text}

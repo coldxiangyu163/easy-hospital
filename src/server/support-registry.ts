@@ -52,9 +52,17 @@ export class TargetSupportRegistry {
     return (
       this.database
         .prepare(
-          `SELECT target_id FROM department
-           WHERE active = 1 AND support_mode = 'rules-only'
-           ORDER BY sort_order, id`,
+          `SELECT DISTINCT department.target_id
+           FROM department
+           INNER JOIN release_rule
+             ON release_rule.hospital_id = department.hospital_id
+            AND release_rule.campus_id = department.campus_id
+            AND release_rule.department_id = department.id
+            AND release_rule.enabled = 1
+           WHERE department.active = 1
+             AND department.support_mode = 'rules-only'
+             AND department.target_id IS NOT NULL
+           ORDER BY department.sort_order, department.id`,
         )
         .all() as Array<{ target_id: string }>
     ).map(({ target_id }) => target_id);

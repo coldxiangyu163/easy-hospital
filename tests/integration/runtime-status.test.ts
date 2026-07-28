@@ -8,6 +8,7 @@ import {
   startApplicationFromEnvironment,
   type RunningApplication,
 } from '../../src/server/runtime.js';
+import { openDatabase } from '../../src/storage/database.js';
 
 describe('GET /api/runtime-status', () => {
   let running: RunningApplication | undefined;
@@ -128,6 +129,35 @@ describe('GET /api/runtime-status', () => {
         }),
       ]),
     });
+  });
+
+  it('rules-only 规则未启用时不暴露当前可用 capability', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-runtime-disabled-rule-'));
+    const database = openDatabase(join(directory, 'data.sqlite3'));
+    database
+      .prepare("UPDATE release_rule SET enabled = 0 WHERE id = 'rule-tongren-rhinology-daily-1500'")
+      .run();
+    database.close();
+
+    running = await startApplicationFromEnvironment({
+      RADAR_HOST: '127.0.0.1',
+      RADAR_PORT: '0',
+      RADAR_DATA_DIR: directory,
+    });
+
+    const response = await fetch(`${running.url}/api/runtime-status`);
+    expect(response.status).toBe(200);
+    const status = (await response.json()) as {
+      sourceCapabilities: Array<{ key: string; targetId?: string }>;
+    };
+    expect(status.sourceCapabilities).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'rules-only:target-tongren-rhinology',
+          targetId: 'target-tongren-rhinology',
+        }),
+      ]),
+    );
   });
 
   it('拒绝低熵 Browser Agent 配对 token', async () => {

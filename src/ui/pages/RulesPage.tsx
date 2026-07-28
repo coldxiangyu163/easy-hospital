@@ -136,7 +136,7 @@ export function RulesPage() {
               </header>
 
               <div className={styles.ruleFacts}>
-                <div><span>本产品提醒时间</span><strong>{rule.releaseTimeLocal}</strong></div>
+                <div><span>常规放号时刻</span><strong>{rule.releaseTimeLocal}</strong></div>
                 <div><span>可关注日期范围</span><strong>提前 {rule.advanceDays} 天</strong></div>
                 <div><span>最后核验</span><strong>{new Date(rule.verifiedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</strong></div>
               </div>
@@ -144,9 +144,9 @@ export function RulesPage() {
               <section className={styles.ruleSupplement} aria-label="医院说明补充">
                 <strong>医院说明补充</strong>
                 <p>{rule.sameDayPolicy}</p>
-                <small>本产品未据此安排提醒；本产品日历和提醒只使用上方的 {rule.releaseTimeLocal}。</small>
+                <small>本产品未据此推算常规放号；日历只使用上方的 {rule.releaseTimeLocal}，实际提醒按任务设置提前发送。</small>
               </section>
-              <p className={styles.calendarDisclaimer}>按本产品提醒时间推算，需在官方渠道确认</p>
+              <p className={styles.calendarDisclaimer}>按常规放号时刻推算；实际提醒按任务设置提前发送，需在官方渠道确认</p>
               <ol className={styles.calendarStrip} aria-label="未来 14 天规则推算">
                 {Array.from({ length: 14 }, (_, index) => {
                   const releaseDate = addDays(today, index);
@@ -156,7 +156,7 @@ export function RulesPage() {
                   return (
                     <li
                       key={releaseDate}
-                      aria-label={`提醒日期 ${releaseDateLabel}、提醒时间 ${rule.releaseTimeLocal}、目标就诊日期 ${appointmentDateLabel}`}
+                      aria-label={`常规放号日期 ${releaseDateLabel}、常规放号时刻 ${rule.releaseTimeLocal}、目标就诊日期 ${appointmentDateLabel}`}
                     >
                       <time dateTime={releaseDate}>{releaseDateLabel}</time>
                       <span>{rule.releaseTimeLocal}</span>

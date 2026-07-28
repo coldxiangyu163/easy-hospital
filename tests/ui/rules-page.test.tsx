@@ -56,16 +56,18 @@ describe('规则与日历', () => {
 
     expect(await screen.findByRole('heading', { name: '什么时候值得看' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '北京同仁医院 · 崇文门院区 · 鼻科' })).toBeInTheDocument();
+    expect(screen.getByText('常规放号时刻')).toBeInTheDocument();
     expect(screen.getByText('08:00', { selector: 'strong' })).toBeInTheDocument();
     expect(screen.getByText('提前 7 天')).toBeInTheDocument();
-    expect(screen.getByText('按本产品提醒时间推算，需在官方渠道确认')).toBeInTheDocument();
+    expect(screen.getByText('按常规放号时刻推算；实际提醒按任务设置提前发送，需在官方渠道确认')).toBeInTheDocument();
     const supplement = screen.getByText('医院说明补充').closest('section');
     expect(supplement).toHaveTextContent('每日 07:00');
-    expect(supplement).toHaveTextContent('本产品未据此安排提醒');
+    expect(supplement).toHaveTextContent('本产品未据此推算常规放号');
+    expect(supplement).toHaveTextContent('实际提醒按任务设置提前发送');
     expect(screen.getAllByText('08:00')).toHaveLength(15);
     expect(document.querySelectorAll('time[datetime]')).toHaveLength(14);
     expect(screen.getAllByRole('listitem', {
-      name: /^提醒日期 .+、提醒时间 08:00、目标就诊日期 .+$/,
+      name: /^常规放号日期 .+、常规放号时刻 08:00、目标就诊日期 .+$/,
     })).toHaveLength(14);
     expect(screen.getByRole('link', { name: '查看医院规则说明（新标签页打开）' })).toHaveAttribute(
       'href',
@@ -97,7 +99,7 @@ describe('规则与日历', () => {
     expect(firstDate).toHaveAttribute('datetime', '2026-07-19');
     expect(firstDate).toHaveTextContent('7月19日');
     expect(screen.getByRole('listitem', {
-      name: '提醒日期 7月19日周日、提醒时间 08:00、目标就诊日期 7月26日周日',
+      name: '常规放号日期 7月19日周日、常规放号时刻 08:00、目标就诊日期 7月26日周日',
     })).toBeInTheDocument();
   });
 });

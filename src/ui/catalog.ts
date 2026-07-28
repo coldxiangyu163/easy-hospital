@@ -107,6 +107,24 @@ export function sourceCapabilityForTarget(
   });
 }
 
+export function canCreateWatchTaskNow(
+  target: CatalogTarget,
+  capabilities: SourceCapability[],
+): boolean {
+  const support = target.department.support;
+  if (!support.active || !support.canCreateWatchTask) return false;
+  if (support.supportMode === 'directory-only') return false;
+  if (support.supportMode === 'public-source' || support.supportMode === 'rules-only') {
+    return Boolean(
+      sourceCapabilityForTarget(
+        target,
+        capabilities.filter((capability) => capability.enabled),
+      ),
+    );
+  }
+  return true;
+}
+
 export function sourceBindingForTarget(
   target: CatalogTarget,
   adapter: SourceCapability | undefined,
@@ -153,7 +171,7 @@ export function supportPresentation(
   if (support.supportMode === 'directory-only') {
     return {
       title: '暂不支持提醒',
-      description: '可以查看院区、科室和医院官网，但当前没有可可靠检查的公开排班或已确认规则。',
+      description: '可以查看院区、科室和医院官网，但当前没有可以可靠检查的公开排班或已确认规则。',
       activityLabel: '仅供目录浏览',
       canCreateWatchTask: false,
       ruleOnly: false,
@@ -179,13 +197,28 @@ export function supportPresentation(
   }
 
   const stability = support.stability ?? source?.stability;
+  if (stability === 'experimental') {
+    return {
+      title: '实验支持',
+      description: '这个公开排班来源仍在实验阶段。只识别官方公开排班，不代表实时余号，也不推断退号。',
+      activityLabel: '实验支持已启用',
+      canCreateWatchTask: support.canCreateWatchTask,
+      ruleOnly: false,
+    };
+  }
+  if (stability === 'stable') {
+    return {
+      title: '可关注公开排班',
+      description: '只识别官方公开页面中的新排班发布。排班不等于实时余号，也不推断退号。',
+      activityLabel: '公开排班关注已启用',
+      canCreateWatchTask: support.canCreateWatchTask,
+      ruleOnly: false,
+    };
+  }
   return {
-    title: stability === 'experimental' ? '实验支持' : '可关注公开排班',
-    description:
-      stability === 'experimental'
-        ? '这个公开排班来源仍在实验阶段。只识别官方公开排班，不代表实时余号，也不推断退号。'
-        : '只识别官方公开页面中的新排班发布。排班不等于实时余号，也不推断退号。',
-    activityLabel: stability === 'experimental' ? '实验支持已启用' : '公开排班关注已启用',
+    title: '公开来源支持',
+    description: '当前只确认已接入公开来源，尚未提供稳定性标签。排班不等于实时余号，也不推断退号。',
+    activityLabel: '公开来源支持已启用',
     canCreateWatchTask: support.canCreateWatchTask,
     ruleOnly: false,
   };

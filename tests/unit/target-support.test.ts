@@ -4,6 +4,8 @@ import {
   watchTaskAllowedByTarget,
   type TargetSupport,
 } from '../../src/core/target-support.js';
+import { supportPresentation } from '../../src/ui/catalog.js';
+import type { SourceCapability } from '../../src/ui/api.js';
 
 const rulesOnly: TargetSupport = {
   active: true,
@@ -64,4 +66,28 @@ describe('target support 任务策略', () => {
       ).toBe(true);
     },
   );
+
+  it('public-source 缺少稳定性信息时使用中性标签，明确来源稳定性时保持标签', () => {
+    const publicSource = { ...rulesOnly, supportMode: 'public-source' as const };
+    const source = (stability: 'stable' | 'experimental'): SourceCapability => ({
+      key: `source-${stability}`,
+      sourceId: `source-${stability}`,
+      accessClass: 'A',
+      enabled: true,
+      transport: 'fetch',
+      minIntervalMs: 60_000,
+      stability,
+      eventTypes: ['schedule_released'],
+      bindings: [],
+      capabilities: { schedule: true, availability: false, cancellation: false, ruleReminder: false },
+      runtime: null,
+    });
+
+    expect(supportPresentation(publicSource)).toMatchObject({
+      title: '公开来源支持',
+      activityLabel: '公开来源支持已启用',
+    });
+    expect(supportPresentation(publicSource, source('stable')).title).toBe('可关注公开排班');
+    expect(supportPresentation(publicSource, source('experimental')).title).toBe('实验支持');
+  });
 });
