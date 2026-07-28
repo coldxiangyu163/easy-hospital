@@ -260,19 +260,23 @@ export function SourcesPage() {
     );
   };
 
-  const renderHospitals = (visibleTargets: CatalogTarget[], directoryOnly: boolean) =>
+  const renderHospitals = (
+    visibleTargets: CatalogTarget[],
+    group: 'creatable' | 'unavailable',
+  ) =>
     state.catalog.hospitals.flatMap((hospital) => {
       const hospitalTargets = visibleTargets.filter((target) => target.hospital.id === hospital.id);
       if (hospitalTargets.length === 0) return [];
+      const unavailable = group === 'unavailable';
       return [
-        <section className={styles.sourceHospital} key={`${directoryOnly ? 'directory' : 'creatable'}-${hospital.id}`}>
+        <section className={styles.sourceHospital} key={`${group}-${hospital.id}`}>
           <header className={styles.sourceHospitalHeader}>
             <div>
               <h2>{hospital.name}</h2>
               <small>{hospitalTargets.length} 个科室</small>
             </div>
-            <span className={directoryOnly ? styles.statusMuted : styles.statusGood}>
-              {directoryOnly ? '仅供目录浏览' : `${hospitalTargets.length} 个可创建提醒`}
+            <span className={unavailable ? styles.statusMuted : styles.statusGood}>
+              {unavailable ? '当前不可创建提醒' : `${hospitalTargets.length} 个可创建提醒`}
             </span>
             <small>查看下方科室与下一步</small>
           </header>
@@ -300,21 +304,23 @@ export function SourcesPage() {
       </section>
 
       <section className={styles.sourceList} aria-label="优先显示可创建提醒的医院和科室">
-        {renderHospitals(creatableTargets, false)}
+        {renderHospitals(creatableTargets, 'creatable')}
       </section>
 
       {hiddenTargets.length > 0 ? (
-        <section className={styles.directorySection} aria-label="其余目录目标">
+        <section className={styles.directorySection} aria-label="目录或暂不可用目标">
           <button
             className={styles.secondaryButton}
             type="button"
             aria-expanded={showDirectoryTargets}
             onClick={() => setShowDirectoryTargets((value) => !value)}
           >
-            {showDirectoryTargets ? '收起其余目录目标' : `显示其余 ${hiddenTargets.length} 个目录目标`}
+            {showDirectoryTargets
+              ? '收起目录或暂不可用目标'
+              : `显示其余 ${hiddenTargets.length} 个目录或暂不可用目标`}
           </button>
           {showDirectoryTargets ? (
-            <div className={styles.sourceList}>{renderHospitals(hiddenTargets, true)}</div>
+            <div className={styles.sourceList}>{renderHospitals(hiddenTargets, 'unavailable')}</div>
           ) : null}
         </section>
       ) : null}

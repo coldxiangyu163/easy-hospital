@@ -230,7 +230,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       enabled: true,
       reason: null,
     }));
-  const sourceCapabilities = [
+  const staticSourceCapabilities = [
     ...[...sourceAdapters.values()].map((adapter) => {
       const manifest = adapter.manifest;
       const bound = isBoundSourceManifest(manifest);
@@ -264,13 +264,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       minIntervalMs: 300_000,
       capabilities: { schedule: false, availability: true, cancellation: true, ruleReminder: false },
     },
-    ...supportRegistry.listRuleOnlyTargetIds().map((targetId) => ({
+  ];
+  const ruleOnlySourceCapabilities = () =>
+    supportRegistry.listRuleOnlyTargetIds().map((targetId) => ({
       key: `rules-only:${targetId}`,
       rateLimitKey: `rules-only:${targetId}`,
       targetId,
       accessClass: 'C' as const,
       enabled: true,
-      transport: 'rules-only',
+      transport: 'rules-only' as const,
       minIntervalMs: null,
       capabilities: {
         schedule: false,
@@ -278,10 +280,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         cancellation: false,
         ruleReminder: true,
       },
-    })),
-  ];
+    }));
   const sourceCapabilitiesWithRuntime = () =>
-    sourceCapabilities.map((capability) => {
+    [...staticSourceCapabilities, ...ruleOnlySourceCapabilities()].map((capability) => {
       const runtime = getSourceRuntime(database, capability.rateLimitKey);
       return {
         ...capability,

@@ -51,14 +51,46 @@ const experimentalTask = {
   eventTypes: ['schedule_released', 'cancellation_slot_detected'],
 };
 
-function runtimeStatusResponse(configured: boolean) {
+const sourceCapabilities = [
+  {
+    key: 'pumch-public-dermatology-schedule',
+    sourceId: 'source-pumch-public-schedule',
+    accessClass: 'A',
+    enabled: true,
+    transport: 'fetch',
+    minIntervalMs: 7_200_000,
+    stability: 'stable',
+    eventTypes: ['schedule_released'],
+    bindings: [{
+      targetId: 'target-pumch-dermatology',
+      hospitalId: 'hospital-pumch',
+      campusId: 'campus-pumch-dongdan',
+      departmentId: 'department-pumch-dermatology',
+      officialEntryUrl: 'https://www.pumch.cn/news_visitinfo.html',
+    }],
+    capabilities: { schedule: true, availability: false, cancellation: false, ruleReminder: false },
+    runtime: null,
+  },
+  {
+    key: 'rules-only:target-tongren-rhinology',
+    targetId: 'target-tongren-rhinology',
+    accessClass: 'C',
+    enabled: true,
+    transport: 'rules-only',
+    minIntervalMs: null,
+    capabilities: { schedule: false, availability: false, cancellation: false, ruleReminder: true },
+    runtime: null,
+  },
+];
+
+function runtimeStatusResponse(configured: boolean, capabilities = sourceCapabilities) {
   return jsonResponse({
     dataDirectory: { display: '…/data' },
     sqlite: { status: 'healthy' },
     worker: { status: 'healthy', running: true },
     notifications: [],
     browserAgent: { configured, lastSeenAt: null },
-    sourceCapabilities: [],
+    sourceCapabilities: capabilities,
   });
 }
 
@@ -71,6 +103,7 @@ describe('编辑关注任务', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return runtimeStatusResponse(false);
       if (path === '/api/watch-tasks/task-1' && init?.method === 'PATCH') {
         patchBody = JSON.parse(String(init.body)) as Record<string, unknown>;
         currentTask = { ...currentTask, ...patchBody, version: 2, updatedAt: '2026-07-19T02:00:00.000Z' };
@@ -314,10 +347,38 @@ describe('编辑关注任务', () => {
     );
   });
 
+  it('当前缺少精确 capability 时仍展示既有字段，但禁用保存且不发 PATCH', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), 'http://localhost').pathname;
+      if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return runtimeStatusResponse(false, []);
+      if (path === '/api/watch-tasks/task-1' && init?.method === 'PATCH') {
+        throw new Error('缺少 capability 时不应发 PATCH');
+      }
+      if (path === '/api/watch-tasks/task-1') return jsonResponse(originalTask);
+      throw new Error(`unexpected request ${path}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1/edit']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: '编辑这件关注' });
+    expect(screen.getByLabelText('开始日期')).toHaveValue('2026-07-28');
+    expect(screen.getByRole('button', { name: '保存更改' })).toBeDisabled();
+    expect(screen.getByText('当前不能保存更改：本次运行没有为这个科室启用精确匹配的公开来源。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存更改' }));
+    expect(fetchMock.mock.calls.some((call) => call[1]?.method === 'PATCH')).toBe(false);
+  });
+
   it('版本冲突时保留内容、分类错误并聚焦摘要', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname;
       if (path === '/api/catalog') return jsonResponse(catalog);
+      if (path === '/api/runtime-status') return runtimeStatusResponse(false);
       if (path === '/api/watch-tasks/task-1' && init?.method === 'PATCH') {
         return jsonResponse({ error: 'WATCH_TASK_VERSION_CONFLICT' }, 409);
       }

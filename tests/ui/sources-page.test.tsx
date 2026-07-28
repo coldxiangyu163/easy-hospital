@@ -200,7 +200,8 @@ describe('数据来源', () => {
     expect(within(anzhenCoronary).getByText('source-anzhen-public-heart-center-schedule').closest('details')).not.toHaveAttribute('open');
 
     expect(screen.queryByRole('heading', { name: '北京大学人民医院 · 西直门 · 血液科' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '显示其余 2 个目录目标' }));
+    fireEvent.click(screen.getByRole('button', { name: '显示其余 2 个目录或暂不可用目标' }));
+    expect(screen.getAllByText('当前不可创建提醒')).toHaveLength(2);
     const directoryRow = screen.getByRole('heading', { name: '北京大学人民医院 · 西直门 · 血液科' }).closest('article')!;
     expect(within(directoryRow).getByText('暂不支持提醒')).toBeInTheDocument();
     expect(within(directoryRow).getByText('待可靠公开来源')).toBeInTheDocument();
@@ -293,7 +294,8 @@ describe('数据来源', () => {
 
     expect(await screen.findByRole('heading', { name: '0 个科室可创建提醒' })).toBeInTheDocument();
     expect(screen.getByText('可创建提醒').nextElementSibling).toHaveTextContent('0');
-    fireEvent.click(screen.getByRole('button', { name: '显示其余 2 个目录目标' }));
+    fireEvent.click(screen.getByRole('button', { name: '显示其余 2 个目录或暂不可用目标' }));
+    expect(screen.getAllByText('当前不可创建提醒')).toHaveLength(2);
     const publicRow = screen.getByRole('heading', {
       name: '北京协和医院 · 东单院区 · 皮肤科',
     }).closest('article')!;

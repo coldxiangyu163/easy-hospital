@@ -8,7 +8,6 @@ import {
   startApplicationFromEnvironment,
   type RunningApplication,
 } from '../../src/server/runtime.js';
-import { openDatabase } from '../../src/storage/database.js';
 
 describe('GET /api/runtime-status', () => {
   let running: RunningApplication | undefined;
@@ -131,33 +130,51 @@ describe('GET /api/runtime-status', () => {
     });
   });
 
-  it('rules-only 规则未启用时不暴露当前可用 capability', async () => {
-    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-runtime-disabled-rule-'));
-    const database = openDatabase(join(directory, 'data.sqlite3'));
-    database
-      .prepare("UPDATE release_rule SET enabled = 0 WHERE id = 'rule-tongren-rhinology-daily-1500'")
-      .run();
-    database.close();
-
+  it('rules-only capability 在服务运行中随规则启停动态消失和恢复', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'easy-hospital-runtime-dynamic-rule-'));
     running = await startApplicationFromEnvironment({
       RADAR_HOST: '127.0.0.1',
       RADAR_PORT: '0',
       RADAR_DATA_DIR: directory,
     });
-
-    const response = await fetch(`${running.url}/api/runtime-status`);
-    expect(response.status).toBe(200);
-    const status = (await response.json()) as {
-      sourceCapabilities: Array<{ key: string; targetId?: string }>;
+    const capability = expect.objectContaining({
+      key: 'rules-only:target-tongren-rhinology',
+      targetId: 'target-tongren-rhinology',
+    });
+    const capabilityKeys = async (path: '/api/runtime-status' | '/api/source-adapters') => {
+      const response = await fetch(`${running!.url}${path}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        sourceCapabilities?: Array<{ key: string; targetId?: string }>;
+        adapters?: Array<{ key: string; targetId?: string }>;
+      };
+      return body.sourceCapabilities ?? body.adapters ?? [];
     };
-    expect(status.sourceCapabilities).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'rules-only:target-tongren-rhinology',
-          targetId: 'target-tongren-rhinology',
-        }),
-      ]),
+
+    expect(await capabilityKeys('/api/runtime-status')).toEqual(expect.arrayContaining([capability]));
+
+    const disabled = await fetch(
+      `${running.url}/api/release-rules/rule-tongren-rhinology-daily-1500`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      },
     );
+    expect(disabled.status).toBe(200);
+    expect(await capabilityKeys('/api/runtime-status')).not.toEqual(expect.arrayContaining([capability]));
+    expect(await capabilityKeys('/api/source-adapters')).not.toEqual(expect.arrayContaining([capability]));
+
+    const reenabled = await fetch(
+      `${running.url}/api/release-rules/rule-tongren-rhinology-daily-1500`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      },
+    );
+    expect(reenabled.status).toBe(200);
+    expect(await capabilityKeys('/api/source-adapters')).toEqual(expect.arrayContaining([capability]));
   });
 
   it('拒绝低熵 Browser Agent 配对 token', async () => {

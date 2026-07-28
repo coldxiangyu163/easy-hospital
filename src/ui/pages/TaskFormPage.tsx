@@ -202,19 +202,19 @@ export function TaskFormPage() {
   const canCreateWatchTask = selectedTarget
     ? canCreateWatchTaskNow(selectedTarget, sourceCapabilities)
     : false;
-  // 运行时 capability 只决定当前是否可新建；既有任务仍可打开和编辑，保存时由服务端复核。
-  const canUseTaskForm = editing || canCreateWatchTask;
+  const showTaskFields = editing || canCreateWatchTask;
   const ruleOnly = policy.ruleOnly;
+  const disabledReasonPrefix = editing ? '当前不能保存更改：' : '当前不能创建提醒：';
   const disabledReason =
     selectedDepartment?.support.active === false
-      ? '当前不能创建提醒：这个科室的关注能力已经停用。'
+      ? `${disabledReasonPrefix}这个科室的关注能力已经停用。`
       : selectedDepartment?.support.supportMode === 'directory-only'
-        ? '当前不能创建提醒：这个科室还没有可以可靠检查的公开排班或已确认规则。'
+        ? `${disabledReasonPrefix}这个科室还没有可以可靠检查的公开排班或已确认规则。`
         : selectedDepartment?.support.supportMode === 'public-source'
-          ? '当前不能创建提醒：本次运行没有为这个科室启用精确匹配的公开来源。'
+          ? `${disabledReasonPrefix}本次运行没有为这个科室启用精确匹配的公开来源。`
           : selectedDepartment?.support.supportMode === 'rules-only'
-            ? '当前不能创建提醒：本次运行没有这个科室的已启用放号规则。'
-            : '当前不能创建提醒：现在无法确认这个科室可以可靠提供提醒。';
+            ? `${disabledReasonPrefix}本次运行没有这个科室的已启用放号规则。`
+            : `${disabledReasonPrefix}现在无法确认这个科室可以可靠提供提醒。`;
   const officialUrl = selectedTarget
     ? sourceBindingForTarget(selectedTarget, selectedSource)?.officialEntryUrl ??
       officialHospitalUrl(selectedTarget.hospital)
@@ -284,8 +284,8 @@ export function TaskFormPage() {
     event.preventDefault();
     setValidationActive(true);
     const nextErrors: FormErrors = {};
-    if (!canUseTaskForm) {
-      nextErrors.form = '这个 target 当前没有已启用的精确来源或规则能力，不能创建关注任务。';
+    if (!canCreateWatchTask) {
+      nextErrors.form = `这个 target 当前没有已启用的精确来源或规则能力，不能${editing ? '保存更改' : '创建关注任务'}。`;
     }
     Object.assign(nextErrors, validateDates(dateFrom, dateTo, earliestDate, latestDate));
     if (!ruleOnly && matchMode === 'doctor' && !doctorName.trim()) nextErrors.doctorName = '请填写医生姓名。';
@@ -431,7 +431,7 @@ export function TaskFormPage() {
           </section>
         </fieldset>
 
-        {canUseTaskForm ? (
+        {showTaskFields ? (
           <>
             <fieldset className={styles.formSection}>
               <legend>匹配条件</legend>
@@ -519,7 +519,7 @@ export function TaskFormPage() {
         <div className={styles.formFooter}>
           <div>
             <p>任务只保存关注条件，不保存身份证、医保卡、医院账号、Cookie 或 Token。</p>
-            {!canUseTaskForm ? (
+            {!canCreateWatchTask ? (
               <p id="submit-disabled-reason" className={styles.disabledReason}>{disabledReason}</p>
             ) : null}
           </div>
@@ -528,8 +528,8 @@ export function TaskFormPage() {
             <button
               className={styles.primaryButton}
               type="submit"
-              disabled={submitting || !canUseTaskForm}
-              aria-describedby={`target-support-explanation reminder-contract${canUseTaskForm ? '' : ' submit-disabled-reason'}`}
+              disabled={submitting || !canCreateWatchTask}
+              aria-describedby={`target-support-explanation reminder-contract${canCreateWatchTask ? '' : ' submit-disabled-reason'}`}
             >
               {submitting ? (editing ? '正在保存…' : '正在创建…') : (editing ? '保存更改' : '创建并开始关注')}
             </button>
